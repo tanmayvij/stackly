@@ -1,0 +1,63 @@
+name: Deploy to Firebase
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build_frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Build frontend
+        working-directory: stackly-frontend
+        run: npm ci && npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: stackly-frontend/dist
+
+  prepare_functions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install and build functions
+        working-directory: functions
+        run: npm ci && npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: functions-build
+          path: |
+            functions/lib
+            functions/node_modules
+            functions/package.json
+            functions/package-lock.json
+
+  deploy:
+    needs: [build_frontend, prepare_functions]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: stackly-frontend/dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: functions-build
+          path: functions
+      - name: Deploy to Firebase
+        run: |
+          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_GHL_BUILDER_161D7 }}' > /tmp/sa.json
+          npx firebase-tools deploy --project ghl-builder-161d7
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: /tmp/sa.json
