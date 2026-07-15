@@ -12,6 +12,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Inject .env
+        working-directory: stackly-frontend
+        run: echo "${{ secrets.VITE_ENV }}" > .env
       - name: Build frontend
         working-directory: stackly-frontend
         run: npm ci && npm run build
