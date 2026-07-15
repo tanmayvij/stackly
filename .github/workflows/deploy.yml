@@ -35,7 +35,6 @@ jobs:
           name: functions-build
           path: |
             functions/lib
-            functions/node_modules
             functions/package.json
             functions/package-lock.json
 
@@ -55,6 +54,9 @@ jobs:
         with:
           name: functions-build
           path: functions
+      - name: Install functions dependencies
+        working-directory: functions
+        run: npm ci --omit=dev
       - name: Deploy to Firebase
         run: |
           echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_GHL_BUILDER_161D7 }}' > /tmp/sa.json
