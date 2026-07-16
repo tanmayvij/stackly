@@ -8,6 +8,7 @@ import router from './router'
 import { useAuthStore } from './stores/auth'
 import { useWalletStore } from './stores/wallet'
 import { useGhlStore } from './stores/ghl'
+import { useProjectsStore } from './stores/projects'
 
 const app = createApp(App)
 
@@ -18,15 +19,18 @@ authStore.init()
 
 const walletStore = useWalletStore()
 const ghlStore = useGhlStore()
+const projectsStore = useProjectsStore()
 watch(
   () => authStore.isAuthenticated,
   (isAuthenticated) => {
     if (isAuthenticated) {
       walletStore.fetchBalance().catch(() => {})
       ghlStore.fetchConnection().catch(() => {})
+      projectsStore.subscribe()
     } else {
       walletStore.reset()
       ghlStore.reset()
+      projectsStore.reset()
     }
   },
   { immediate: true },

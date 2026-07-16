@@ -1,54 +1,96 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
+import {
+  collection,
+  doc,
+  onSnapshot,
+  orderBy,
+  query,
+  serverTimestamp,
+  updateDoc,
+  where,
+  type Unsubscribe,
+} from 'firebase/firestore'
+import { db } from '@/lib/firebase'
+import { createProject as createProjectFn } from '@/lib/callables'
+import { useAuthStore } from '@/stores/auth'
 
 export interface Project {
   id: string
   name: string
   description: string
-  editedLabel: string
-  modelId?: string
-}
-
-// Dummy data until the projects backend exists.
-const SEED: Project[] = [
-  {
-    id: 'lead-router',
-    name: 'Lead Router',
-    description: 'Routes inbound leads to the right sub-account pipeline via the GHL Contacts API.',
-    editedLabel: 'Edited 2h ago',
-  },
-  {
-    id: 'review-requester',
-    name: 'Review Requester',
-    description: 'Sends a review request text after an opportunity is marked won.',
-    editedLabel: 'Edited yesterday',
-  },
-  {
-    id: 'invoice-sync',
-    name: 'Invoice Sync',
-    description: 'Two-way sync between GHL invoices and your external ledger.',
-    editedLabel: 'Edited 3d ago',
-  },
-]
-
-function deriveTitle(prompt: string) {
-  const words = prompt.trim().split(/\s+/).slice(0, 3).filter(Boolean)
-  if (!words.length) return 'Untitled App'
-  return words.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')
+  modelId: string
+  lastModified: Date
 }
 
 export const useProjectsStore = defineStore('projects', () => {
-  const projects = ref<Project[]>([...SEED])
+  const projects = ref<Project[]>([])
+  const isLoading = ref(false)
+  let unsubscribe: Unsubscribe | null = null
 
-  function createProject(prompt: string, modelId: string) {
-    projects.value.unshift({
-      id: crypto.randomUUID(),
-      name: deriveTitle(prompt),
-      description: prompt,
-      editedLabel: 'Edited just now',
-      modelId,
+  function projectsCollection(uid: string) {
+    return collection(db, 'users', uid, 'projects')
+  }
+
+  /** Subscribes to the signed-in user's live, non-deleted project list. */
+  function subscribe() {
+    const uid = useAuthStore().user?.uid
+    if (!uid) return
+    unsubscribe?.()
+    isLoading.value = true
+    const q = query(
+      projectsCollection(uid),
+      where('deleted', '==', false),
+      orderBy('lastModified', 'desc'),
+    )
+    unsubscribe = onSnapshot(q, (snapshot) => {
+      projects.value = snapshot.docs.map((d) => {
+        const data = d.data()
+        return {
+          id: d.id,
+          name: data.name,
+          description: data.description,
+          modelId: data.modelId,
+          lastModified: data.lastModified?.toDate?.() ?? new Date(),
+        }
+      })
+      isLoading.value = false
     })
   }
 
-  return { projects, createProject }
+  /** Creates a project server-side; the listener surfaces the new document. */
+  async function createProject(prompt: string, modelId: string) {
+    const { data } = await createProjectFn({ prompt, modelId })
+    return data
+  }
+
+  async function updateProject(
+    id: string,
+    patch: Partial<Pick<Project, 'name' | 'description'>>,
+  ) {
+    const uid = useAuthStore().user?.uid
+    if (!uid) return
+    await updateDoc(doc(db, 'users', uid, 'projects', id), {
+      ...patch,
+      lastModified: serverTimestamp(),
+    })
+  }
+
+  async function softDelete(id: string) {
+    const uid = useAuthStore().user?.uid
+    if (!uid) return
+    await updateDoc(doc(db, 'users', uid, 'projects', id), {
+      deleted: true,
+      lastModified: serverTimestamp(),
+    })
+  }
+
+  function reset() {
+    unsubscribe?.()
+    unsubscribe = null
+    projects.value = []
+    isLoading.value = false
+  }
+
+  return { projects, isLoading, subscribe, createProject, updateProject, softDelete, reset }
 })

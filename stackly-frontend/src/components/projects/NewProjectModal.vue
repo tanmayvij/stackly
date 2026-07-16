@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { Sparkles } from '@lucide/vue'
+import { LoaderCircle, Sparkles } from '@lucide/vue'
 import ModelSelect from '@/components/projects/ModelSelect.vue'
 import { Button } from '@/components/ui/button'
 import {
@@ -33,15 +33,30 @@ const EXAMPLES = [
 
 const prompt = ref('')
 const modelId = ref(DEFAULT_MODEL_ID)
+const processing = ref(false)
+const errorMessage = ref<string | null>(null)
 
 watch(open, (isOpen) => {
-  if (!isOpen) prompt.value = ''
+  if (!isOpen) {
+    prompt.value = ''
+    processing.value = false
+    errorMessage.value = null
+  }
 })
 
-function onCreate() {
-  if (!prompt.value.trim()) return
-  projectsStore.createProject(prompt.value.trim(), modelId.value)
-  open.value = false
+async function onCreate() {
+  if (!prompt.value.trim() || processing.value) return
+  errorMessage.value = null
+  processing.value = true
+  try {
+    await projectsStore.createProject(prompt.value.trim(), modelId.value)
+    open.value = false
+  } catch (err) {
+    errorMessage.value =
+      err instanceof Error && err.message ? err.message : 'Could not create the project. Please try again.'
+  } finally {
+    processing.value = false
+  }
 }
 </script>
 
@@ -61,15 +76,16 @@ function onCreate() {
         <Textarea
           v-model="prompt"
           :rows="4"
+          :disabled="processing"
           class="bg-muted min-h-24 resize-none"
-          placeholder="e.g. A dashboard that shows opportunity value by pipeline stage, pulling from the GHL Opportunities API…"
         />
         <div class="flex flex-wrap gap-2">
           <button
             v-for="example in EXAMPLES"
             :key="example.label"
             type="button"
-            class="text-muted-foreground bg-muted hover:border-border-strong hover:text-foreground cursor-pointer rounded-full border px-3 py-1 text-xs transition-colors"
+            :disabled="processing"
+            class="text-muted-foreground bg-muted hover:border-border-strong hover:text-foreground cursor-pointer rounded-full border px-3 py-1 text-xs transition-colors disabled:opacity-50"
             @click="prompt = example.prompt"
           >
             {{ example.label }}
@@ -77,13 +93,16 @@ function onCreate() {
         </div>
       </div>
 
+      <p v-if="errorMessage" role="alert" class="text-destructive text-sm">{{ errorMessage }}</p>
+
       <div class="flex items-center justify-between gap-3">
         <ModelSelect v-model="modelId" />
         <div class="flex items-center gap-2">
-          <Button variant="outline" @click="open = false">Cancel</Button>
-          <Button :disabled="!prompt.trim()" @click="onCreate">
-            <Sparkles />
-            Create app
+          <Button variant="outline" :disabled="processing" @click="open = false">Cancel</Button>
+          <Button :disabled="!prompt.trim() || processing" @click="onCreate">
+            <LoaderCircle v-if="processing" class="size-4 animate-spin" />
+            <Sparkles v-else />
+            {{ processing ? 'Creating…' : 'Create app' }}
           </Button>
         </div>
       </div>

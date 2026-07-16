@@ -65,3 +65,12 @@ export const getGhlConnection = callable<void, GhlConnectionStatus | null>('getG
 
 /** Removes the caller's stored HighLevel connection. */
 export const disconnectGhl = callable<void, { ok: true }>('disconnectGhl')
+
+/**
+ * Generates a name and description for the prompt via the LLM and stores a new
+ * project under the caller's account. Returns the created project.
+ */
+export const createProject = callable<
+  { prompt: string; modelId: string },
+  { id: string; name: string; description: string; modelId: string }
+>('createProject')

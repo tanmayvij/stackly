@@ -1,11 +1,22 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { Plus } from '@lucide/vue'
+import EditProjectModal from '@/components/projects/EditProjectModal.vue'
 import NewProjectModal from '@/components/projects/NewProjectModal.vue'
 import ProjectCard from '@/components/projects/ProjectCard.vue'
 import { Button } from '@/components/ui/button'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { useGhlStore } from '@/stores/ghl'
-import { useProjectsStore } from '@/stores/projects'
+import { useProjectsStore, type Project } from '@/stores/projects'
 import { useUiStore } from '@/stores/ui'
 import { useWalletStore } from '@/stores/wallet'
 
@@ -15,6 +26,10 @@ const ui = useUiStore()
 const walletStore = useWalletStore()
 
 const newProjectOpen = ref(false)
+const editOpen = ref(false)
+const deleteOpen = ref(false)
+const activeProject = ref<Project | null>(null)
+const deleting = ref(false)
 
 // Gate order: low balance → recharge; not connected → GHL connect; else act.
 function gated(action: () => void) {
@@ -35,6 +50,27 @@ function onNewProject() {
 
 function onCardSelect() {
   gated(() => null)
+}
+
+function onEdit(project: Project) {
+  activeProject.value = project
+  editOpen.value = true
+}
+
+function onDelete(project: Project) {
+  activeProject.value = project
+  deleteOpen.value = true
+}
+
+async function confirmDelete() {
+  if (!activeProject.value || deleting.value) return
+  deleting.value = true
+  try {
+    await projectsStore.softDelete(activeProject.value.id)
+    deleteOpen.value = false
+  } finally {
+    deleting.value = false
+  }
 }
 </script>
 
@@ -57,6 +93,8 @@ function onCardSelect() {
         :key="project.id"
         :project="project"
         @select="onCardSelect"
+        @edit="onEdit(project)"
+        @delete="onDelete(project)"
       />
     </div>
 
@@ -77,5 +115,27 @@ function onCardSelect() {
     </div>
 
     <NewProjectModal v-model:open="newProjectOpen" />
+    <EditProjectModal v-model:open="editOpen" :project="activeProject" />
+
+    <AlertDialog v-model:open="deleteOpen">
+      <AlertDialogContent class="bg-card border-border-strong shadow-card rounded-xl">
+        <AlertDialogHeader>
+          <AlertDialogTitle>BAD THINGS WILL HAPPEN IF YOU DON'T READ THIS</AlertDialogTitle>
+          <AlertDialogDescription>
+            “{{ activeProject?.name }}” will be permanently deleted. Please note that this entails you losing all your code for this project and will be permanently unrecoverable.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel :disabled="deleting">Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            class="bg-destructive text-white hover:bg-destructive/90"
+            :disabled="deleting"
+            @click="confirmDelete"
+          >
+            {{ deleting ? 'Deleting…' : 'Delete' }}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   </section>
 </template>
