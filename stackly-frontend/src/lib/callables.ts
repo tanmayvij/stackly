@@ -47,3 +47,21 @@ export const confirmTopUp = callable<
   { paymentIntentId: string },
   { status: PaymentIntentStatus; balanceCents: number }
 >('confirmTopUp')
+
+/** The caller's HighLevel connection status, or null if not connected. */
+export type GhlConnectionStatus = { locationName: string; scopesGranted: number }
+
+/**
+ * Exchanges a HighLevel OAuth authorization code for tokens (stored
+ * server-side) and returns the connected location's name and scope count.
+ */
+export const exchangeGhlCode = callable<
+  { code: string; redirectUri: string },
+  GhlConnectionStatus
+>('exchangeGhlCode')
+
+/** Returns the caller's HighLevel connection status, or null if not connected. */
+export const getGhlConnection = callable<void, GhlConnectionStatus | null>('getGhlConnection')
+
+/** Removes the caller's stored HighLevel connection. */
+export const disconnectGhl = callable<void, { ok: true }>('disconnectGhl')
