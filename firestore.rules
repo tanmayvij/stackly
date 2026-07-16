@@ -1,10 +1,13 @@
-rules_version='2'
+rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    match /wallets/{document=**} {
+      allow read, write: if false;
+    }
+
     match /{document=**} {
-      // TODO: replace with proper auth-scoped rules before production
-      allow read, write: if true;
+      allow read, write: if false;
     }
   }
 }

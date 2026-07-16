@@ -1,0 +1,10 @@
+{
+  "name": "stackly",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n backend,frontend -c blue,green -k \"npm --prefix functions run serve\" \"npm --prefix stackly-frontend run dev\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.0"
+  }
+}

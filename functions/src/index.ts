@@ -1,11 +1,4 @@
-import { setGlobalOptions } from "firebase-functions";
-import { onRequest } from "firebase-functions/https";
-import * as logger from "firebase-functions/logger";
+import "./app";
 
-
-setGlobalOptions({ maxInstances: 10 });
-
-export const health = onRequest((_request, response) => {
-    logger.info("Health Check", { structuredData: true });
-    response.json({ success: true });
-});
+export {health} from "./health";
+export {getCurrentBalance, createTopUpIntent, confirmTopUp} from "./wallet";

@@ -17,6 +17,10 @@ const walletStore = useWalletStore()
 
 const walletOpen = ref(false)
 
+const isLowBalance = computed(
+  () => walletStore.balance !== null && walletStore.balance < 100,
+)
+
 const displayName = computed(() => authStore.user?.displayName || 'Your account')
 const email = computed(() => authStore.user?.email ?? '')
 const initial = computed(() =>
@@ -43,7 +47,10 @@ async function onSignOut() {
         @click="walletOpen = true"
       >
         <Wallet class="text-muted-foreground" />
-        {{ formatUSD(walletStore.balance) }}
+        <span v-if="walletStore.balance === null" class="text-muted-foreground">—</span>
+        <span v-else :class="{ 'text-destructive': isLowBalance }">
+          {{ formatUSD(walletStore.balance) }}
+        </span>
       </Button>
 
       <ThemeToggle size="icon-sm" />
