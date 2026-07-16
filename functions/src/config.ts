@@ -1,4 +1,4 @@
-import { defineSecret } from "firebase-functions/params";
+import {defineSecret} from "firebase-functions/params";
 
 // Stripe secret (API) key. Bound only to functions that talk to Stripe.
 // Set with: `firebase functions:secrets:set STRIPE_SECRET_KEY`
@@ -18,8 +18,8 @@ export interface ModelPrice {
 // Per-model pricing. The cost of any single API call is always rounded UP to
 // the next whole cent (see `costForTokens` in ./wallet).
 export const MODEL_PRICING: ModelPrice[] = [
-  { model: "zai-org/GLM-5.2", pricePerMillionTokensCents: 400 },
-  { model: "moonshotai/Kimi-K2.7-Code", pricePerMillionTokensCents: 450 },
-  { model: "deepseek-ai/DeepSeek-V4-Flash", pricePerMillionTokensCents: 50 },
-  { model: "openai/gpt-oss-120b", pricePerMillionTokensCents: 35 },
+  {model: "zai-org/GLM-5.2", pricePerMillionTokensCents: 400},
+  {model: "moonshotai/Kimi-K2.7-Code", pricePerMillionTokensCents: 450},
+  {model: "deepseek-ai/DeepSeek-V4-Flash", pricePerMillionTokensCents: 50},
+  {model: "openai/gpt-oss-120b", pricePerMillionTokensCents: 35},
 ];
