@@ -1,6 +1,8 @@
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { getCurrentBalance } from '@/lib/callables'
+
+const LOW_BALANCE_THRESHOLD_CENTS = 100
 
 export const useWalletStore = defineStore('wallet', () => {
   // Balance is always integer cents and is NEVER computed on the client —
@@ -8,6 +10,10 @@ export const useWalletStore = defineStore('wallet', () => {
   // "not yet loaded".
   const balance = ref<number | null>(null)
   const isLoading = ref(false)
+
+  const isLowBalance = computed(
+    () => balance.value !== null && balance.value < LOW_BALANCE_THRESHOLD_CENTS,
+  )
 
   /**
    * Fetches the authoritative balance from the server. This is the only way
@@ -28,5 +34,5 @@ export const useWalletStore = defineStore('wallet', () => {
     isLoading.value = false
   }
 
-  return { balance, isLoading, fetchBalance, reset }
+  return { balance, isLoading, isLowBalance, fetchBalance, reset }
 })

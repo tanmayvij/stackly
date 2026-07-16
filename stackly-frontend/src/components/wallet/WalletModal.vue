@@ -44,10 +44,6 @@ const effectiveCents = computed(
 
 const exceedsMax = computed(() => effectiveCents.value > MAX_AMOUNT_CENTS)
 
-const lowBalance = computed(
-  () => walletStore.balance !== null && walletStore.balance < 100,
-)
-
 function isSelected(amount: number) {
   return !customAmount.value && rechargeAmount.value === amount
 }
@@ -209,7 +205,7 @@ onBeforeUnmount(() => paymentElement?.unmount())
 
       <!-- Scrollable body: content between the pinned header and footer. -->
       <div class="flex flex-1 flex-col gap-5 overflow-y-auto px-6">
-        <p v-if="lowBalance" class="text-destructive text-sm">
+        <p v-if="walletStore.isLowBalance" class="text-destructive text-sm">
           Please add funds to your wallet to keep using the app.
         </p>
 
