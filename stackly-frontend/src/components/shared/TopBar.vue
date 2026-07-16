@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { LogOut, Wallet } from '@lucide/vue'
 import AppLogo from '@/components/shared/AppLogo.vue'
@@ -9,13 +9,13 @@ import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { formatUSD } from '@/lib/format'
 import { useAuthStore } from '@/stores/auth'
+import { useUiStore } from '@/stores/ui'
 import { useWalletStore } from '@/stores/wallet'
 
 const router = useRouter()
 const authStore = useAuthStore()
+const ui = useUiStore()
 const walletStore = useWalletStore()
-
-const walletOpen = ref(false)
 
 const displayName = computed(() => authStore.user?.displayName || 'Your account')
 const email = computed(() => authStore.user?.email ?? '')
@@ -40,7 +40,7 @@ async function onSignOut() {
         variant="secondary"
         title="Wallet"
         class="hover:border-border-strong hover:bg-secondary h-8 rounded-full border px-3.5 font-semibold"
-        @click="walletOpen = true"
+        @click="ui.walletModalOpen = true"
       >
         <Wallet class="text-muted-foreground" />
         <span v-if="walletStore.balance === null" class="text-muted-foreground">—</span>
@@ -69,6 +69,6 @@ async function onSignOut() {
       </Button>
     </div>
 
-    <WalletModal v-model:open="walletOpen" />
+    <WalletModal v-model:open="ui.walletModalOpen" />
   </header>
 </template>

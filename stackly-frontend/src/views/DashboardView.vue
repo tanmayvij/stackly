@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import AppLayout from '@/layouts/AppLayout.vue'
 import GhlConnectionBanner from '@/components/ghl/GhlConnectionBanner.vue'
+import ProjectsSection from '@/components/projects/ProjectsSection.vue'
 </script>
 
 <template>
   <AppLayout>
     <div class="mx-auto max-w-5xl">
       <GhlConnectionBanner class="mb-7" />
-      <h1 class="text-2xl font-semibold tracking-tight">Dashboard</h1>
+      <ProjectsSection />
     </div>
   </AppLayout>
 </template>

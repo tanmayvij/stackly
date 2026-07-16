@@ -14,10 +14,11 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
 import { useGhlStore } from '@/stores/ghl'
+import { useUiStore } from '@/stores/ui'
 
 const ghlStore = useGhlStore()
+const ui = useUiStore()
 
-const connectOpen = ref(false)
 const disconnectOpen = ref(false)
 const disconnecting = ref(false)
 
@@ -101,9 +102,9 @@ async function onDisconnect() {
           </div>
         </div>
       </div>
-      <Button @click="connectOpen = true">Connect</Button>
+      <Button @click="ui.ghlConnectModalOpen = true">Connect</Button>
     </template>
 
-    <GhlConnectModal v-model:open="connectOpen" />
+    <GhlConnectModal v-model:open="ui.ghlConnectModalOpen" />
   </div>
 </template>
