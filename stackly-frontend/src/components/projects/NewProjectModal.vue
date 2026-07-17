@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { LoaderCircle, Sparkles } from '@lucide/vue'
+import { useRouter } from 'vue-router'
+import { LoaderCircle, ShieldCheck, Sparkles } from '@lucide/vue'
 import ModelSelect from '@/components/projects/ModelSelect.vue'
 import { Button } from '@/components/ui/button'
 import {
@@ -16,6 +17,7 @@ import { useProjectsStore } from '@/stores/projects'
 
 const open = defineModel<boolean>('open', { required: true })
 
+const router = useRouter()
 const projectsStore = useProjectsStore()
 
 const EXAMPLES = [
@@ -49,8 +51,9 @@ async function onCreate() {
   errorMessage.value = null
   processing.value = true
   try {
-    await projectsStore.createProject(prompt.value.trim(), modelId.value)
+    const created = await projectsStore.createProject(prompt.value.trim(), modelId.value)
     open.value = false
+    router.push({ name: 'builder', params: { id: created.id } })
   } catch (err) {
     errorMessage.value =
       err instanceof Error && err.message ? err.message : 'Could not create the project. Please try again.'
@@ -106,6 +109,14 @@ async function onCreate() {
           </Button>
         </div>
       </div>
+
+      <p class="text-muted-foreground flex items-start gap-2 border-t pt-4 text-xs leading-relaxed">
+        <ShieldCheck class="text-foreground/70 mt-px size-3.5 shrink-0" />
+        <span>
+          Our LLM provider is SOC 2 and ISO 27001 certified, GDPR compliant, and operates under a
+          zero data retention (ZDR) policy — your prompts are never stored or used for training.
+        </span>
+      </p>
     </DialogContent>
   </Dialog>
 </template>
