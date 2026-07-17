@@ -63,12 +63,15 @@ export const useProjectsStore = defineStore('projects', () => {
   /**
    * Creates a project server-side and optimistically inserts it locally so a
    * caller can navigate straight to it without waiting on the listener to
-   * catch up. The next snapshot replaces this array wholesale, so the
-   * optimistic entry is superseded rather than duplicated.
+   * catch up. The backend commits the Firestore write before returning, so
+   * the listener can just as easily win the race and deliver the doc first —
+   * guard against that instead of assuming this call is always first.
    */
   async function createProject(prompt: string, modelId: string) {
     const { data } = await createProjectFn({ prompt, modelId })
-    projects.value = [{ ...data, lastModified: new Date() }, ...projects.value]
+    if (!projects.value.some((p) => p.id === data.id)) {
+      projects.value = [{ ...data, lastModified: new Date() }, ...projects.value]
+    }
     return data
   }
 
