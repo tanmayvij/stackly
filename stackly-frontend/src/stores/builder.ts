@@ -354,6 +354,7 @@ export const useBuilderStore = defineStore('builder', () => {
     device,
     lastSavedAt,
     headVersion,
+    headManifest,
     treeRows,
     activeFile,
     isActiveFileDirty,
