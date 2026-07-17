@@ -24,6 +24,12 @@ const router = createRouter({
       meta: { guestOnly: true },
     },
     {
+      path: '/verify-email',
+      name: 'verify-email',
+      component: () => import('@/views/VerifyEmailView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/dashboard',
       name: 'dashboard',
       component: () => import('@/views/DashboardView.vue'),
@@ -65,6 +71,14 @@ router.beforeEach(async (to) => {
     return { name: 'auth', query: { redirect: to.fullPath } }
   }
   if (to.meta.guestOnly && authStore.isAuthenticated) {
+    return { name: 'dashboard' }
+  }
+  // Gate authenticated-but-unverified users behind the verification screen.
+  // Google sign-in accounts arrive with emailVerified === true, so they pass through.
+  if (authStore.isAuthenticated && !authStore.isEmailVerified && to.name !== 'verify-email') {
+    return { name: 'verify-email' }
+  }
+  if (authStore.isEmailVerified && to.name === 'verify-email') {
     return { name: 'dashboard' }
   }
 })

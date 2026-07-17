@@ -83,7 +83,7 @@ async function onCreate() {
   try {
     const displayName = [firstName.value.trim(), lastName.value.trim()].filter(Boolean).join(' ')
     await authStore.register(email.value.trim(), password.value, displayName)
-    goToApp()
+    router.push({ name: 'verify-email' })
   } catch (error) {
     formError.value = getAuthErrorMessage(error)
   } finally {
