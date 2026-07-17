@@ -26,6 +26,7 @@ export interface Project {
 export const useProjectsStore = defineStore('projects', () => {
   const projects = ref<Project[]>([])
   const isLoading = ref(false)
+  const hasLoaded = ref(false)
   let unsubscribe: Unsubscribe | null = null
 
   function projectsCollection(uid: string) {
@@ -55,6 +56,7 @@ export const useProjectsStore = defineStore('projects', () => {
         }
       })
       isLoading.value = false
+      hasLoaded.value = true
     })
   }
 
@@ -90,7 +92,17 @@ export const useProjectsStore = defineStore('projects', () => {
     unsubscribe = null
     projects.value = []
     isLoading.value = false
+    hasLoaded.value = false
   }
 
-  return { projects, isLoading, subscribe, createProject, updateProject, softDelete, reset }
+  return {
+    projects,
+    isLoading,
+    hasLoaded,
+    subscribe,
+    createProject,
+    updateProject,
+    softDelete,
+    reset,
+  }
 })

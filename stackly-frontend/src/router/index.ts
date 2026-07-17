@@ -36,6 +36,18 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/projects/:id',
+      name: 'builder',
+      component: () => import('@/views/BuilderView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/preview/:id',
+      name: 'preview',
+      component: () => import('@/views/PreviewView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/:pathMatch(.*)*',
       name: 'not-found',
       component: () => import('@/views/NotFoundView.vue'),

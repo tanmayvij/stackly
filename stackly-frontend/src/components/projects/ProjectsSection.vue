@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { Plus } from '@lucide/vue'
 import EditProjectModal from '@/components/projects/EditProjectModal.vue'
 import NewProjectModal from '@/components/projects/NewProjectModal.vue'
@@ -20,6 +21,7 @@ import { useProjectsStore, type Project } from '@/stores/projects'
 import { useUiStore } from '@/stores/ui'
 import { useWalletStore } from '@/stores/wallet'
 
+const router = useRouter()
 const ghlStore = useGhlStore()
 const projectsStore = useProjectsStore()
 const ui = useUiStore()
@@ -48,8 +50,8 @@ function onNewProject() {
   gated(() => (newProjectOpen.value = true))
 }
 
-function onCardSelect() {
-  gated(() => null)
+function onCardSelect(project: Project) {
+  gated(() => router.push({ name: 'builder', params: { id: project.id } }))
 }
 
 function onEdit(project: Project) {
@@ -92,7 +94,7 @@ async function confirmDelete() {
         v-for="project in projectsStore.projects"
         :key="project.id"
         :project="project"
-        @select="onCardSelect"
+        @select="onCardSelect(project)"
         @edit="onEdit(project)"
         @delete="onDelete(project)"
       />

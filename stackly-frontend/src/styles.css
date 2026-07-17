@@ -127,6 +127,20 @@
   --sidebar-ring: #6366f1;
 }
 
+@theme {
+  --animate-typing-dot: typing-dot 1.1s ease-in-out infinite;
+  @keyframes typing-dot {
+    0%,
+    60%,
+    100% {
+      opacity: 0.25;
+    }
+    30% {
+      opacity: 1;
+    }
+  }
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -136,14 +150,5 @@
   }
   ::selection {
     @apply bg-primary/35;
-  }
-}
-
-@layer base {
-  * {
-    @apply border-border outline-ring/50;
-  }
-  body {
-    @apply bg-background text-foreground;
   }
 }

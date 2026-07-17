@@ -15,6 +15,7 @@
     "format": "prettier --write --experimental-cli src/"
   },
   "dependencies": {
+    "@guolao/vue-monaco-editor": "^1.6.0",
     "@lucide/vue": "^1.24.0",
     "@stripe/stripe-js": "^8.11.0",
     "@tailwindcss/vite": "^4.3.2",
@@ -22,6 +23,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "firebase": "^12.16.0",
+    "monaco-editor": "^0.55.1",
     "pinia": "^3.0.4",
     "reka-ui": "^2.10.1",
     "tailwind-merge": "^3.6.0",
