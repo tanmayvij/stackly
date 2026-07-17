@@ -11,14 +11,30 @@ service cloud.firestore {
         && resource.data.deleted == false;
       // Only the Cloud Function (Admin SDK) creates projects.
       allow create: if false;
-      // Owner may edit name/description and soft-delete; createdAt and modelId
-      // are immutable and lastModified must be the server time.
+      // Owner may edit name/description, soft-delete, and advance headVersion
+      // as new versions are committed. createdAt and modelId are immutable,
+      // headVersion may only move forward, and lastModified must be server time.
       allow update: if request.auth != null && request.auth.uid == uid
         && request.resource.data.createdAt == resource.data.createdAt
         && request.resource.data.modelId == resource.data.modelId
+        && request.resource.data.headVersion >= resource.data.headVersion
         && request.resource.data.lastModified == request.time;
       // Soft-delete only (set deleted = true); never a hard delete.
       allow delete: if false;
+
+      // Version snapshots: append-only, immutable, non-deletable history.
+      // The owner (client) creates versions directly; the AI agent creates
+      // them via the Admin SDK, which bypasses these rules.
+      match /versions/{n} {
+        allow read: if request.auth != null && request.auth.uid == uid;
+        allow create: if request.auth != null && request.auth.uid == uid
+          && request.resource.data.n is int
+          && request.resource.data.title is string
+          && request.resource.data.tree is map
+          && request.resource.data.createdAt == request.time;
+        // Versions can never be modified or removed once written.
+        allow update, delete: if false;
+      }
     }
 
     match /{document=**} {

@@ -1,13 +1,7 @@
-// Temporary dummy data for the builder screen, until the files/versions/chat
-// backend exists. Consumed only via stores/builder.ts.
-
-export interface FileSeed {
-  id: string
-  name: string
-  parentId: string | null
-  kind: 'file' | 'folder'
-  content?: string
-}
+// Temporary dummy data for the builder chat and preview, until those backends
+// exist. Files and versions are now real (see stores/builder-repo.ts); the JSX
+// constants below only feed the canned chat transcript. Consumed via
+// stores/builder.ts (chat) and PreviewPanel/ChatPanel (display constants).
 
 const APP_JSX = `import ContactsList from './components/ContactsList'
 import AppointmentsCard from './components/AppointmentsCard'
@@ -99,73 +93,6 @@ export function fetchAppointments(day) {
   return ghl('/calendars/events', { day }).then((d) => d.events)
 }
 `
-
-const INDEX_HTML = `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Recent Contacts Dashboard</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
-</html>
-`
-
-const PACKAGE_JSON = `{
-  "name": "recent-contacts-dashboard",
-  "private": true,
-  "version": "0.1.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build"
-  },
-  "dependencies": {
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
-  },
-  "devDependencies": {
-    "@vitejs/plugin-react": "^5.0.0",
-    "vite": "^7.0.0"
-  }
-}
-`
-
-export const FILE_SEED: FileSeed[] = [
-  { id: 'src', name: 'src', parentId: null, kind: 'folder' },
-  { id: 'app-jsx', name: 'App.jsx', parentId: 'src', kind: 'file', content: APP_JSX },
-  { id: 'components', name: 'components', parentId: 'src', kind: 'folder' },
-  {
-    id: 'contacts-list-jsx',
-    name: 'ContactsList.jsx',
-    parentId: 'components',
-    kind: 'file',
-    content: CONTACTS_LIST_JSX,
-  },
-  {
-    id: 'appointments-card-jsx',
-    name: 'AppointmentsCard.jsx',
-    parentId: 'components',
-    kind: 'file',
-    content: APPOINTMENTS_CARD_JSX,
-  },
-  { id: 'lib', name: 'lib', parentId: 'src', kind: 'folder' },
-  { id: 'ghl-js', name: 'ghl.js', parentId: 'lib', kind: 'file', content: GHL_JS },
-  { id: 'index-html', name: 'index.html', parentId: null, kind: 'file', content: INDEX_HTML },
-  { id: 'package-json', name: 'package.json', parentId: null, kind: 'file', content: PACKAGE_JSON },
-]
-
-export const DEFAULT_ACTIVE_FILE_ID = 'app-jsx'
-
-export const VERSION_SEED = [
-  { n: 12, message: 'Add appointments card', timeAgo: '2m ago' },
-  { n: 11, message: 'Style contact rows', timeAgo: '14m ago' },
-  { n: 10, message: 'Fetch contacts from GHL', timeAgo: '1h ago' },
-  { n: 9, message: 'Initial scaffold', timeAgo: '2h ago' },
-]
 
 export interface DiffLine {
   type: 'add' | 'del' | 'context'

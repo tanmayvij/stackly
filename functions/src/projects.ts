@@ -1,14 +1,14 @@
-import {getFirestore, FieldValue} from "firebase-admin/firestore";
-import {onCall, HttpsError} from "firebase-functions/https";
-import {MODEL_PRICING, OPENAI_API_KEY, OPENAI_BASE_URL} from "./config";
-import {generateProjectMeta} from "./openai";
+import { getFirestore, FieldValue } from "firebase-admin/firestore";
+import { onCall, HttpsError } from "firebase-functions/https";
+import { MODEL_PRICING, OPENAI_API_KEY, OPENAI_BASE_URL } from "./config";
+import { generateProjectMeta } from "./openai";
 
 /**
  * Rejects unauthenticated callers.
  * @param {{uid: string} | undefined} auth The callable auth context.
  * @return {string} The authenticated uid.
  */
-function requireUid(auth: {uid: string} | undefined): string {
+function requireUid(auth: { uid: string } | undefined): string {
   if (!auth) {
     throw new HttpsError("unauthenticated", "Sign in to create a project.");
   }
@@ -19,7 +19,7 @@ function requireUid(auth: {uid: string} | undefined): string {
 // stores a new project under `users/{uid}/projects/{guid}`. The document's
 // auto-generated id doubles as the storage folder reference for its files.
 export const createProject = onCall(
-  {secrets: [OPENAI_API_KEY, OPENAI_BASE_URL]},
+  { secrets: [OPENAI_API_KEY, OPENAI_BASE_URL] },
   async (request) => {
     const uid = requireUid(request.auth);
 
@@ -48,6 +48,7 @@ export const createProject = onCall(
       description: meta.description,
       modelId,
       deleted: false,
+      headVersion: 0,
       createdAt: FieldValue.serverTimestamp(),
       lastModified: FieldValue.serverTimestamp(),
     });
