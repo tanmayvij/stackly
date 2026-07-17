@@ -60,9 +60,15 @@ export const useProjectsStore = defineStore('projects', () => {
     })
   }
 
-  /** Creates a project server-side; the listener surfaces the new document. */
+  /**
+   * Creates a project server-side and optimistically inserts it locally so a
+   * caller can navigate straight to it without waiting on the listener to
+   * catch up. The next snapshot replaces this array wholesale, so the
+   * optimistic entry is superseded rather than duplicated.
+   */
   async function createProject(prompt: string, modelId: string) {
     const { data } = await createProjectFn({ prompt, modelId })
+    projects.value = [{ ...data, lastModified: new Date() }, ...projects.value]
     return data
   }
 
