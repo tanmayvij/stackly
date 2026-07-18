@@ -49,6 +49,8 @@ export const createProject = onCall(
       modelId,
       deleted: false,
       headVersion: 0,
+      initialPrompt: prompt.trim(),
+      lastMessageSeq: 0,
       createdAt: FieldValue.serverTimestamp(),
       lastModified: FieldValue.serverTimestamp(),
     });

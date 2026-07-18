@@ -74,3 +74,12 @@ export const createProject = callable<
   { prompt: string; modelId: string },
   { id: string; name: string; description: string; modelId: string }
 >('createProject')
+
+/**
+ * Mints a short-lived token the preview iframe uses to call the GHL proxy.
+ * Fails with `failed-precondition` when HighLevel is not connected.
+ */
+export const mintPreviewToken = callable<
+  void,
+  { token: string; expiresAtMs: number; locationId: string }
+>('mintPreviewToken')

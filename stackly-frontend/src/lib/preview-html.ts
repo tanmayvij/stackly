@@ -80,21 +80,33 @@ const ERROR_BRIDGE = `(function () {
   })
 })()`
 
+/** Runtime config for the platform-provided GHL client in generated apps. */
+export interface GhlPreviewConfig {
+  proxyUrl: string
+  token: string
+  locationId: string
+}
+
 export function buildSrcdoc(opts: {
   js: string
   css: string
   importMap: Record<string, string>
   tailwind: boolean
+  ghl?: GhlPreviewConfig | null
 }): string {
   const escapedJs = opts.js.replace(/<\/script/gi, '<\\/script').replace(/<!--/g, '<\\!--')
   const css = opts.tailwind ? stripTailwindDirectives(opts.css) : opts.css
+  // <-escape so a value can never break out of the script tag.
+  const ghlConfig = opts.ghl
+    ? `<script>window.__STACKLY_GHL__ = ${JSON.stringify(opts.ghl).replace(/</g, '\\u003c')}</script>\n`
+    : ''
   return `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script type="importmap">${JSON.stringify({ imports: opts.importMap })}</script>
-<script>${ERROR_BRIDGE}</script>
+${ghlConfig}<script>${ERROR_BRIDGE}</script>
 ${opts.tailwind ? `<script src="https://unpkg.com/@tailwindcss/browser@4"></script>` : ''}
 <style>html,body,#root{min-height:100%}body{margin:0;font-family:system-ui,sans-serif}</style>
 ${css ? `<style>${css}</style>` : ''}

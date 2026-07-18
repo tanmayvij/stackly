@@ -14,11 +14,14 @@ service cloud.firestore {
       // Owner may edit name/description, soft-delete, and advance headVersion
       // as new versions are committed. createdAt and modelId are immutable,
       // headVersion may only move forward, and lastModified must be server time.
+      // initialPrompt and lastMessageSeq are server-managed (chat pipeline).
       allow update: if request.auth != null && request.auth.uid == uid
         && request.resource.data.createdAt == resource.data.createdAt
         && request.resource.data.modelId == resource.data.modelId
         && request.resource.data.headVersion >= resource.data.headVersion
-        && request.resource.data.lastModified == request.time;
+        && request.resource.data.lastModified == request.time
+        && !request.resource.data.diff(resource.data).affectedKeys()
+          .hasAny(['initialPrompt', 'lastMessageSeq']);
       // Soft-delete only (set deleted = true); never a hard delete.
       allow delete: if false;
 
@@ -34,6 +37,13 @@ service cloud.firestore {
           && request.resource.data.createdAt == request.time;
         // Versions can never be modified or removed once written.
         allow update, delete: if false;
+      }
+
+      // Chat transcript: written only by the chat Cloud Function (Admin
+      // SDK); the owner reads it live via onSnapshot.
+      match /messages/{messageId} {
+        allow read: if request.auth != null && request.auth.uid == uid;
+        allow write: if false;
       }
     }
 

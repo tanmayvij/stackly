@@ -20,6 +20,8 @@ export interface Project {
   name: string
   description: string
   modelId: string
+  // The creation prompt; the builder auto-sends it as the first chat turn.
+  initialPrompt: string
   lastModified: Date
 }
 
@@ -52,6 +54,7 @@ export const useProjectsStore = defineStore('projects', () => {
           name: data.name,
           description: data.description,
           modelId: data.modelId,
+          initialPrompt: data.initialPrompt ?? '',
           lastModified: data.lastModified?.toDate?.() ?? new Date(),
         }
       })
@@ -70,7 +73,10 @@ export const useProjectsStore = defineStore('projects', () => {
   async function createProject(prompt: string, modelId: string) {
     const { data } = await createProjectFn({ prompt, modelId })
     if (!projects.value.some((p) => p.id === data.id)) {
-      projects.value = [{ ...data, lastModified: new Date() }, ...projects.value]
+      projects.value = [
+        { ...data, initialPrompt: prompt.trim(), lastModified: new Date() },
+        ...projects.value,
+      ]
     }
     return data
   }

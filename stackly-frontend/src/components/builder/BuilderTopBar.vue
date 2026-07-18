@@ -1,12 +1,19 @@
 <script setup lang="ts">
-import { ArrowLeft } from '@lucide/vue'
+import { ArrowLeft, Wallet } from '@lucide/vue'
 import AppLogo from '@/components/shared/AppLogo.vue'
 import ThemeToggle from '@/components/shared/ThemeToggle.vue'
+import WalletModal from '@/components/wallet/WalletModal.vue'
+import { Button } from '@/components/ui/button'
+import { formatUSD } from '@/lib/format'
 import { useGhlStore } from '@/stores/ghl'
+import { useUiStore } from '@/stores/ui'
+import { useWalletStore } from '@/stores/wallet'
 
 defineProps<{ projectName: string; versionN: number }>()
 
 const ghlStore = useGhlStore()
+const ui = useUiStore()
+const walletStore = useWalletStore()
 </script>
 
 <template>
@@ -29,6 +36,19 @@ const ghlStore = useGhlStore()
     </div>
 
     <div class="flex items-center gap-2.5">
+      <Button
+        variant="secondary"
+        title="Wallet"
+        class="hover:border-border-strong hover:bg-secondary h-8 rounded-full border px-3.5 font-semibold"
+        @click="ui.walletModalOpen = true"
+      >
+        <Wallet class="text-muted-foreground" />
+        <span v-if="walletStore.balance === null" class="text-muted-foreground">—</span>
+        <span v-else :class="{ 'text-destructive': walletStore.isLowBalance }">
+          {{ formatUSD(walletStore.balance) }}
+        </span>
+      </Button>
+
       <div class="bg-card flex h-7 items-center gap-2 rounded-full border px-3 text-xs">
         <template v-if="ghlStore.connection">
           <span class="size-1.5 rounded-full bg-green-500 shadow-[0_0_8px] shadow-green-500/70" />
@@ -41,5 +61,7 @@ const ghlStore = useGhlStore()
       </div>
       <ThemeToggle size="icon-sm" />
     </div>
+
+    <WalletModal v-model:open="ui.walletModalOpen" />
   </header>
 </template>

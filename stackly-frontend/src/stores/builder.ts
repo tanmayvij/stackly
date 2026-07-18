@@ -1,8 +1,9 @@
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
-import { CANNED_REPLY, MESSAGE_SEED } from '@/lib/builder-fixtures'
-import type { DiffFile } from '@/lib/builder-fixtures'
 import { useAuthStore } from '@/stores/auth'
+import { useProjectsStore } from '@/stores/projects'
+import { useUiStore } from '@/stores/ui'
+import { useWalletStore } from '@/stores/wallet'
 import {
   commitVersion,
   fetchBlob,
@@ -12,10 +13,19 @@ import {
   type Manifest,
   type Version,
 } from '@/lib/builder-repo'
+import { subscribeMessages, type ChatMessageDoc, type ChatQuestion } from '@/lib/chat-repo'
+import {
+  InsufficientBalanceError,
+  streamChat,
+  type ChatAnswer,
+  type ChatRequestBody,
+  type ChatStreamEvent,
+} from '@/lib/chat-stream'
 import type { Unsubscribe } from 'firebase/firestore'
 
 export type BuilderTab = 'chat' | 'code'
 export type DeviceKind = 'phone' | 'desktop'
+export type StreamPhase = 'compacting' | 'committing' | null
 
 export interface TreeRow {
   id: string
@@ -25,14 +35,10 @@ export interface TreeRow {
   depth: number
 }
 
-export type ChatMessage =
-  | { id: number; role: 'user' | 'assistant'; text: string }
-  | {
-    id: number
-    role: 'diff'
-    summary: string
-    files: DiffFile[]
-  }
+export interface PendingQuestions {
+  messageId: string
+  questions: ChatQuestion[]
+}
 
 interface TreeNode {
   name: string
@@ -80,15 +86,32 @@ function manifestToRows(manifest: Manifest): TreeRow[] {
 
 const basename = (path: string) => path.split('/').pop() ?? path
 
+// Must mirror the backend's renderAnswers() so the optimistic echo bubble is
+// recognized as the persisted user doc when it arrives.
+function renderAnswers(answers: ChatAnswer[]): string {
+  return answers.map((a) => `Q: ${a.question}\nA: ${a.choice}`).join('\n\n')
+}
+
 export const useBuilderStore = defineStore('builder', () => {
   const projectId = ref<string | null>(null)
   const versions = ref<Version[]>([])
+  const versionsLoaded = ref(false)
   const activeFileId = ref<string | null>(null)
-  const messages = ref<ChatMessage[]>([])
-  const isTyping = ref(false)
   const activeTab = ref<BuilderTab>('chat')
   const device = ref<DeviceKind>('desktop')
   const lastSavedAt = ref(0)
+
+  // Chat: Firestore is the single source of truth for finished turns; the
+  // streaming refs below are a render-only overlay for the turn in flight.
+  const messages = ref<ChatMessageDoc[]>([])
+  const messagesLoaded = ref(false)
+  const isStreaming = ref(false)
+  const streamingText = ref('')
+  const streamingFiles = reactive(new Map<string, 'writing' | 'done'>())
+  const phase = ref<StreamPhase>(null)
+  const chatError = ref<string | null>(null)
+  const insufficientBalance = ref(false)
+  const localEcho = ref<string | null>(null)
 
   // Editor buffers, keyed by path — ephemeral client state, never persisted
   // as-is. `openContents` is the live buffer; `savedContents` is the head
@@ -96,9 +119,18 @@ export const useBuilderStore = defineStore('builder', () => {
   const openContents = reactive(new Map<string, string>())
   const savedContents = reactive(new Map<string, string>())
 
-  let nextMessageId = 1
-  let pendingTimers: ReturnType<typeof setTimeout>[] = []
   let versionsUnsub: Unsubscribe | null = null
+  let messagesUnsub: Unsubscribe | null = null
+  let streamAbort: AbortController | null = null
+  let lastRequest: ChatRequestBody | null = null
+  let autoRunAttempted = false
+  // Assistant doc id announced by the stream; the overlay clears when the
+  // doc arrives via the snapshot (or the fallback timer below fires).
+  let awaitingMessageId: string | null = null
+  let streamEnded = false
+  let overlayTimer: ReturnType<typeof setTimeout> | null = null
+  // Guards state mutations from a stale stream after a project switch.
+  let runSeq = 0
 
   const headVersion = computed(() => versions.value[0]?.n ?? 0)
   const headManifest = computed<Manifest>(() => versions.value[0]?.tree ?? {})
@@ -118,14 +150,221 @@ export const useBuilderStore = defineStore('builder', () => {
   // The head version is always the current one; restore appends a new head.
   const activeVersionN = computed(() => headVersion.value)
 
+  const lastMessage = computed(() => messages.value[messages.value.length - 1] ?? null)
+
+  // Streaming but nothing rendered yet — drives the typing indicator.
+  const isTyping = computed(
+    () =>
+      isStreaming.value && !streamingText.value && streamingFiles.size === 0 && !phase.value,
+  )
+
+  const suggestions = computed(() => {
+    if (isStreaming.value || localEcho.value) return []
+    const last = lastMessage.value
+    return last?.role === 'assistant' && last.status === 'complete' ? last.suggestions : []
+  })
+
+  // Questions are answerable only while their message is the final turn —
+  // derived from the persisted doc, so they survive a reload.
+  const pendingQuestions = computed<PendingQuestions | null>(() => {
+    if (isStreaming.value || localEcho.value) return null
+    const last = lastMessage.value
+    if (last?.role === 'assistant' && last.status === 'complete' && last.questions.length) {
+      return { messageId: last.id, questions: last.questions }
+    }
+    return null
+  })
+
+  // A user turn with no reply (reload mid-generation, early failure).
+  const hasDanglingUserTurn = computed(
+    () =>
+      messagesLoaded.value &&
+      !isStreaming.value &&
+      !localEcho.value &&
+      lastMessage.value?.role === 'user',
+  )
+
+  // The failed/stopped assistant turn that can be retried inline.
+  const retryableMessageId = computed(() => {
+    if (isStreaming.value || localEcho.value) return null
+    const last = lastMessage.value
+    if (last?.role === 'assistant' && (last.status === 'error' || last.status === 'interrupted')) {
+      return last.id
+    }
+    return null
+  })
+
+  const initialPrompt = computed(() => {
+    const pid = projectId.value
+    if (!pid) return null
+    const project = useProjectsStore().projects.find((p) => p.id === pid)
+    return project?.initialPrompt?.trim() || null
+  })
+
   function uid() {
     return useAuthStore().user?.uid ?? null
   }
 
-  function clearTimers() {
-    pendingTimers.forEach(clearTimeout)
-    pendingTimers = []
+  function clearOverlay() {
+    if (overlayTimer) clearTimeout(overlayTimer)
+    overlayTimer = null
+    isStreaming.value = false
+    streamingText.value = ''
+    streamingFiles.clear()
+    phase.value = null
+    awaitingMessageId = null
+    streamEnded = false
   }
+
+  // Keeps the finished overlay on screen just until its Firestore doc lands,
+  // so the reply never flickers away and reappears.
+  function armOverlayClear(myRun: number) {
+    streamEnded = true
+    if (awaitingMessageId && messages.value.some((m) => m.id === awaitingMessageId)) {
+      clearOverlay()
+      return
+    }
+    overlayTimer = setTimeout(() => {
+      if (runSeq === myRun) clearOverlay()
+    }, 5000)
+  }
+
+  function reconcileStream(msgs: ChatMessageDoc[]) {
+    if (localEcho.value && msgs.some((m) => m.role === 'user' && m.content === localEcho.value)) {
+      localEcho.value = null
+    }
+    if (!isStreaming.value) return
+    if (awaitingMessageId) {
+      if (msgs.some((m) => m.id === awaitingMessageId)) clearOverlay()
+    } else if (streamEnded && msgs[msgs.length - 1]?.role === 'assistant') {
+      clearOverlay()
+    }
+  }
+
+  function onStreamEvent(event: ChatStreamEvent) {
+    switch (event.type) {
+      case 'reply-delta':
+        streamingText.value += event.text
+        break
+      case 'file-start':
+        streamingFiles.set(event.path, 'writing')
+        break
+      case 'file-end':
+      case 'file-delete':
+        streamingFiles.set(event.path, 'done')
+        break
+      case 'status':
+        phase.value =
+          event.phase === 'compacting' || event.phase === 'committing' ? event.phase : null
+        break
+      case 'message':
+        awaitingMessageId = event.id
+        break
+      case 'error':
+        chatError.value = event.message
+        break
+      default:
+        // user-message / file-delta / question / suggestion / version / done:
+        // the Firestore snapshot (or versions listener) carries these.
+        break
+    }
+  }
+
+  async function runStream(body: ChatRequestBody) {
+    if (isStreaming.value || !uid()) return
+    const myRun = ++runSeq
+    chatError.value = null
+    insufficientBalance.value = false
+    isStreaming.value = true
+    streamingText.value = ''
+    streamingFiles.clear()
+    phase.value = null
+    awaitingMessageId = null
+    streamEnded = false
+    lastRequest = body
+    streamAbort = new AbortController()
+
+    try {
+      await streamChat(body, (e) => {
+        if (runSeq === myRun) onStreamEvent(e)
+      }, streamAbort.signal)
+      if (runSeq === myRun) armOverlayClear(myRun)
+    } catch (err) {
+      if (runSeq !== myRun) return
+      if ((err as DOMException)?.name === 'AbortError') {
+        // User cancel: the backend persists the interrupted turn; keep the
+        // partial overlay until that doc arrives.
+        armOverlayClear(myRun)
+      } else if (err instanceof InsufficientBalanceError) {
+        insufficientBalance.value = true
+        localEcho.value = null // nothing was persisted — retry re-sends it
+        clearOverlay()
+        useUiStore().walletModalOpen = true
+      } else {
+        chatError.value = err instanceof Error ? err.message : 'Something went wrong.'
+        clearOverlay()
+      }
+    } finally {
+      if (runSeq === myRun) {
+        streamAbort = null
+        void useWalletStore().fetchBalance()
+      }
+    }
+  }
+
+  function sendMessage(text: string) {
+    const trimmed = text.trim()
+    const pid = projectId.value
+    if (!trimmed || !pid || isStreaming.value) return
+    localEcho.value = trimmed
+    void runStream({ projectId: pid, message: trimmed })
+  }
+
+  function answerQuestions(answers: ChatAnswer[]) {
+    const pid = projectId.value
+    if (!pid || isStreaming.value || !answers.length) return
+    localEcho.value = renderAnswers(answers)
+    void runStream({ projectId: pid, answers })
+  }
+
+  function cancelGeneration() {
+    streamAbort?.abort()
+  }
+
+  /**
+   * Retries the pending turn: after a 402 the original body is re-sent
+   * (nothing was persisted); otherwise an empty-body request makes the
+   * backend regenerate from the stored history.
+   */
+  function retryLast() {
+    const pid = projectId.value
+    if (!pid || isStreaming.value) return
+    chatError.value = null
+    if (insufficientBalance.value && lastRequest) {
+      insufficientBalance.value = false
+      if (lastRequest.message) localEcho.value = lastRequest.message
+      else if (lastRequest.answers) localEcho.value = renderAnswers(lastRequest.answers)
+      void runStream(lastRequest)
+      return
+    }
+    void runStream({ projectId: pid })
+  }
+
+  // First run only: a brand-new project (no versions, no messages) auto-sends
+  // its creation prompt through the exact same path as any other message.
+  function maybeAutoRun() {
+    if (autoRunAttempted || isStreaming.value) return
+    if (!versionsLoaded.value || !messagesLoaded.value) return
+    if (headVersion.value !== 0 || messages.value.length > 0) return
+    const pid = projectId.value
+    const prompt = initialPrompt.value
+    if (!pid || !prompt) return
+    autoRunAttempted = true
+    localEcho.value = prompt
+    void runStream({ projectId: pid, message: prompt })
+  }
+
+  watch([versionsLoaded, messagesLoaded, initialPrompt], () => maybeAutoRun())
 
   async function ensureLoaded(path: string) {
     if (openContents.has(path)) return
@@ -159,16 +398,27 @@ export const useBuilderStore = defineStore('builder', () => {
 
   function initForProject(id: string) {
     if (projectId.value === id) return
-    clearTimers()
+    // Kill any in-flight stream before swapping ids so a stale event can
+    // never touch the new project's state (runSeq guards the rest).
+    streamAbort?.abort()
+    runSeq++
     versionsUnsub?.()
+    messagesUnsub?.()
 
     projectId.value = id
     versions.value = []
+    versionsLoaded.value = false
+    messages.value = []
+    messagesLoaded.value = false
     activeFileId.value = null
     openContents.clear()
     savedContents.clear()
-    messages.value = MESSAGE_SEED.map((seed) => ({ ...structuredClone(seed), id: nextMessageId++ }))
-    isTyping.value = false
+    clearOverlay()
+    chatError.value = null
+    insufficientBalance.value = false
+    localEcho.value = null
+    lastRequest = null
+    autoRunAttempted = false
     activeTab.value = 'chat'
     device.value = 'desktop'
     lastSavedAt.value = 0
@@ -177,11 +427,25 @@ export const useBuilderStore = defineStore('builder', () => {
     if (!u) return
     versionsUnsub = subscribeVersions(u, id, (vs) => {
       versions.value = vs
+      versionsLoaded.value = true
       void reconcileOpenFiles()
+      // Preselect the first file without selectFile(): that would switch to
+      // the code tab, yanking the user out of the chat when a generated
+      // version lands.
       if (!activeFileId.value) {
         const firstFile = treeRows.value.find((r) => r.kind === 'file')
-        if (firstFile) selectFile(firstFile.id)
+        if (firstFile) {
+          activeFileId.value = firstFile.id
+          void ensureLoaded(firstFile.id)
+        }
       }
+      maybeAutoRun()
+    })
+    messagesUnsub = subscribeMessages(u, id, (msgs) => {
+      messages.value = msgs
+      messagesLoaded.value = true
+      reconcileStream(msgs)
+      maybeAutoRun()
     })
   }
 
@@ -301,8 +565,6 @@ export const useBuilderStore = defineStore('builder', () => {
     const u = uid()
     if (!u || !projectId.value || n === headVersion.value) return
     const target = versions.value.find((v) => v.n === n)
-    console.log("Restoring v" + n);
-    console.log(target)
     if (!target) return
     await commitVersion(
       u,
@@ -312,36 +574,27 @@ export const useBuilderStore = defineStore('builder', () => {
     )
   }
 
-  function sendMessage(text: string) {
-    const trimmed = text.trim()
-    if (!trimmed || isTyping.value) return
-    messages.value.push({ id: nextMessageId++, role: 'user', text: trimmed })
-    pendingTimers.push(
-      setTimeout(() => {
-        isTyping.value = true
-      }, 240),
-      setTimeout(() => {
-        isTyping.value = false
-        messages.value.push({ id: nextMessageId++, role: 'assistant', text: CANNED_REPLY.text })
-        messages.value.push({
-          id: nextMessageId++,
-          role: 'diff',
-          ...structuredClone(CANNED_REPLY.diff),
-        })
-      }, 1400),
-    )
-  }
-
   function reset() {
-    clearTimers()
+    streamAbort?.abort()
+    runSeq++
     versionsUnsub?.()
     versionsUnsub = null
+    messagesUnsub?.()
+    messagesUnsub = null
     projectId.value = null
     versions.value = []
+    versionsLoaded.value = false
+    messages.value = []
+    messagesLoaded.value = false
     activeFileId.value = null
     openContents.clear()
     savedContents.clear()
-    messages.value = []
+    clearOverlay()
+    chatError.value = null
+    insufficientBalance.value = false
+    localEcho.value = null
+    lastRequest = null
+    autoRunAttempted = false
   }
 
   return {
@@ -349,7 +602,19 @@ export const useBuilderStore = defineStore('builder', () => {
     versions,
     activeFileId,
     messages,
+    messagesLoaded,
+    isStreaming,
+    streamingText,
+    streamingFiles,
+    phase,
+    chatError,
+    insufficientBalance,
+    localEcho,
     isTyping,
+    suggestions,
+    pendingQuestions,
+    hasDanglingUserTurn,
+    retryableMessageId,
     activeTab,
     device,
     lastSavedAt,
@@ -368,6 +633,9 @@ export const useBuilderStore = defineStore('builder', () => {
     deleteFile,
     restoreVersion,
     sendMessage,
+    answerQuestions,
+    cancelGeneration,
+    retryLast,
     reset,
   }
 })

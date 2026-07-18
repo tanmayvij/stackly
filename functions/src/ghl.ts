@@ -3,9 +3,9 @@ import {onCall, HttpsError} from "firebase-functions/https";
 import {GHL_CLIENT_ID, GHL_CLIENT_SECRET} from "./config";
 
 const TOKEN_URL = "https://services.leadconnectorhq.com/oauth/token";
-const API_BASE = "https://services.leadconnectorhq.com";
+export const API_BASE = "https://services.leadconnectorhq.com";
 // API version for CRM resource endpoints and the token endpoint.
-const API_VERSION = "v3";
+export const API_VERSION = "v3";
 
 // The subset of GetAccessTokenSuccessfulResponseDto we consume. All GHL tokens
 // in this app are minted with userType "Location", so `locationId` is present.

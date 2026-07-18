@@ -1,8 +1,8 @@
 import OpenAI from "openai";
-import { OPENAI_API_KEY, OPENAI_BASE_URL } from "./config";
+import { FLASH_MODEL, OPENAI_API_KEY, OPENAI_BASE_URL } from "./config";
 
 // Fast + cheap; project naming is a small, latency-sensitive request.
-const META_MODEL = "deepseek-ai/DeepSeek-V4-Flash";
+const META_MODEL = FLASH_MODEL;
 
 // Kept byte-identical across calls so the provider's automatic prefix caching
 // hits on every request.
@@ -20,7 +20,7 @@ export interface ProjectMeta {
  * Lazily constructs the OpenAI-compatible client from runtime secrets.
  * @return {OpenAI} A configured client pointed at OPENAI_BASE_URL.
  */
-function client(): OpenAI {
+export function openaiClient(): OpenAI {
   return new OpenAI({
     apiKey: OPENAI_API_KEY.value(),
     baseURL: OPENAI_BASE_URL.value(),
@@ -37,7 +37,7 @@ function client(): OpenAI {
 export async function generateProjectMeta(
   prompt: string,
 ): Promise<ProjectMeta> {
-  const completion = await client().chat.completions.create({
+  const completion = await openaiClient().chat.completions.create({
     model: META_MODEL,
     response_format: { type: "json_object" },
     messages: [

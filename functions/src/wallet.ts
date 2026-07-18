@@ -22,7 +22,7 @@ interface WalletTransaction {
   timestamp: FirebaseFirestore.Timestamp | FirebaseFirestore.FieldValue;
 }
 
-interface AddTransactionInput {
+export interface AddTransactionInput {
   userId: string;
   type: TransactionType;
   valueInCents: number;
@@ -50,7 +50,7 @@ function txCollection(userId: string) {
  * @param {string} userId The owner's uid.
  * @return {Promise<number>} The balance in cents.
  */
-async function getBalanceForUser(userId: string): Promise<number> {
+export async function getBalanceForUser(userId: string): Promise<number> {
   const snapshot = await txCollection(userId).get();
   let balanceCents = 0;
   snapshot.forEach((doc) => {
@@ -69,7 +69,9 @@ async function getBalanceForUser(userId: string): Promise<number> {
  * @return {Promise<boolean>} `true` if a transaction was written, `false` if a
  *   transaction with the same refId already existed.
  */
-async function addTransaction(input: AddTransactionInput): Promise<boolean> {
+export async function addTransaction(
+  input: AddTransactionInput,
+): Promise<boolean> {
   const {userId, type, valueInCents, tokensUsed, refId} = input;
   const col = txCollection(userId);
 
