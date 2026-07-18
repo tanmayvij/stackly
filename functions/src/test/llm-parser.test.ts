@@ -1,5 +1,5 @@
 // Self-running unit tests for llm-parser.ts. Executed with plain Node
-// (no framework): `npm test` → `node lib/llm-parser.test.js`. Exits
+// (no framework): `npm test` → `node lib/test/llm-parser.test.js`. Exits
 // non-zero on the first failure.
 
 import assert from "node:assert";
@@ -10,7 +10,7 @@ import {
   ParseFinish,
   ResponseAccumulator,
   normalizePath,
-} from "./llm-parser";
+} from "../llm-parser";
 
 interface ParseRun {
   events: ParseEvent[];
