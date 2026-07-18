@@ -2,15 +2,15 @@
 // SUMMARY_SYSTEM_PROMPT are frozen — byte-identical across requests — so
 // the provider's automatic prefix caching hits on every call.
 
-import {GHL_DOCS} from "./ghl-docs";
-import {HistoryMessage} from "./messages";
+import { GHL_DOCS } from "./ghl-docs";
+import { HistoryMessage } from "./messages";
 
 // A union (not a single interface) so arrays of these are assignable to
 // the openai SDK's discriminated ChatCompletionMessageParam union.
 export type LlmMessage =
-  | {role: "system"; content: string}
-  | {role: "user"; content: string}
-  | {role: "assistant"; content: string};
+  | { role: "system"; content: string }
+  | { role: "user"; content: string }
+  | { role: "assistant"; content: string };
 
 export interface ProjectFile {
   path: string;
@@ -64,6 +64,9 @@ One to three sentences: what you built or changed, or why you refuse.
 ...entire file content...
 </file>
    The closing </file> must be alone on its own line.
+   Saying you changed a file does NOT change it: a file only changes when
+   its <file> block is in THIS response. If you intend to make file changes,
+   ENSURE to include the <file> block.
 3. Delete a file:
 <delete path="src/Old.jsx"/>
 4. Only if you are genuinely blocked on a decision the user must make: ask
@@ -152,8 +155,8 @@ export function buildChatMessages(
   turns: HistoryMessage[],
 ): LlmMessage[] {
   const messages: LlmMessage[] = [
-    {role: "system", content: SYSTEM_MESSAGE},
-    {role: "user", content: filesSection(files, hasGhlClient)},
+    { role: "system", content: SYSTEM_MESSAGE },
+    { role: "user", content: filesSection(files, hasGhlClient) },
   ];
   if (summary) {
     messages.push({
