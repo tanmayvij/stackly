@@ -9,7 +9,7 @@ export interface LlmModel {
   recommended?: boolean
 }
 
-export const DEFAULT_MODEL_ID = 'moonshotai/Kimi-K2.7-Code'
+export const DEFAULT_MODEL_ID = 'zai-org/GLM-5.2'
 
 export const MODELS: LlmModel[] = [
   {
@@ -27,7 +27,6 @@ export const MODELS: LlmModel[] = [
     contextWindow: '256k',
     contextWindowTokens: 256_000,
     bestFor: 'writing and editing app code',
-    recommended: true,
   },
   {
     id: 'deepseek-ai/DeepSeek-V4-Flash',
@@ -44,5 +43,6 @@ export const MODELS: LlmModel[] = [
     contextWindow: '1M',
     contextWindowTokens: 1_000_000,
     bestFor: 'polished, UI-heavy apps and visual layouts',
+    recommended: true,
   },
 ]
