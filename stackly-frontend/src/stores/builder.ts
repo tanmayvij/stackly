@@ -15,6 +15,7 @@ import {
 } from '@/lib/builder-repo'
 import { subscribeMessages, type ChatMessageDoc, type ChatQuestion } from '@/lib/chat-repo'
 import {
+  GenerationInProgressError,
   InsufficientBalanceError,
   streamChat,
   type ChatAnswer,
@@ -111,6 +112,10 @@ export const useBuilderStore = defineStore('builder', () => {
   const phase = ref<StreamPhase>(null)
   const chatError = ref<string | null>(null)
   const insufficientBalance = ref(false)
+  // Another run (zombie after a dropped connection, or a second tab) holds
+  // the server-side generation lock — its result arrives via the messages
+  // listener, so this is informational, not an error.
+  const serverBusy = ref(false)
   const localEcho = ref<string | null>(null)
 
   // Editor buffers, keyed by path — ephemeral client state, never persisted
@@ -129,8 +134,13 @@ export const useBuilderStore = defineStore('builder', () => {
   let awaitingMessageId: string | null = null
   let streamEnded = false
   let overlayTimer: ReturnType<typeof setTimeout> | null = null
+  let busyTimer: ReturnType<typeof setTimeout> | null = null
   // Guards state mutations from a stale stream after a project switch.
   let runSeq = 0
+
+  // If the lock holder crashed and never writes a result, fall back to the
+  // Resume affordance after this long (the stale lock is stealable by then).
+  const SERVER_BUSY_FALLBACK_MS = 90_000
 
   const headVersion = computed(() => versions.value[0]?.n ?? 0)
   const headManifest = computed<Manifest>(() => versions.value[0]?.tree ?? {})
@@ -180,6 +190,7 @@ export const useBuilderStore = defineStore('builder', () => {
     () =>
       messagesLoaded.value &&
       !isStreaming.value &&
+      !serverBusy.value &&
       !localEcho.value &&
       lastMessage.value?.role === 'user',
   )
@@ -216,6 +227,12 @@ export const useBuilderStore = defineStore('builder', () => {
     streamEnded = false
   }
 
+  function clearServerBusy() {
+    if (busyTimer) clearTimeout(busyTimer)
+    busyTimer = null
+    serverBusy.value = false
+  }
+
   // Keeps the finished overlay on screen just until its Firestore doc lands,
   // so the reply never flickers away and reappears.
   function armOverlayClear(myRun: number) {
@@ -232,6 +249,10 @@ export const useBuilderStore = defineStore('builder', () => {
   function reconcileStream(msgs: ChatMessageDoc[]) {
     if (localEcho.value && msgs.some((m) => m.role === 'user' && m.content === localEcho.value)) {
       localEcho.value = null
+    }
+    // The lock-holding run finished and delivered its turn.
+    if (serverBusy.value && msgs[msgs.length - 1]?.role === 'assistant') {
+      clearServerBusy()
     }
     if (!isStreaming.value) return
     if (awaitingMessageId) {
@@ -275,6 +296,7 @@ export const useBuilderStore = defineStore('builder', () => {
     const myRun = ++runSeq
     chatError.value = null
     insufficientBalance.value = false
+    clearServerBusy()
     isStreaming.value = true
     streamingText.value = ''
     streamingFiles.clear()
@@ -295,6 +317,16 @@ export const useBuilderStore = defineStore('builder', () => {
         // User cancel: the backend persists the interrupted turn; keep the
         // partial overlay until that doc arrives.
         armOverlayClear(myRun)
+      } else if (err instanceof GenerationInProgressError) {
+        // 409: a previous run (dropped connection / other tab) still owns
+        // the turn. Don't re-run it — its result lands via onSnapshot.
+        localEcho.value = null // nothing was persisted for this attempt
+        clearOverlay()
+        serverBusy.value = true
+        if (busyTimer) clearTimeout(busyTimer)
+        busyTimer = setTimeout(() => {
+          if (runSeq === myRun) serverBusy.value = false
+        }, SERVER_BUSY_FALLBACK_MS)
       } else if (err instanceof InsufficientBalanceError) {
         insufficientBalance.value = true
         localEcho.value = null // nothing was persisted — retry re-sends it
@@ -414,6 +446,7 @@ export const useBuilderStore = defineStore('builder', () => {
     openContents.clear()
     savedContents.clear()
     clearOverlay()
+    clearServerBusy()
     chatError.value = null
     insufficientBalance.value = false
     localEcho.value = null
@@ -590,6 +623,7 @@ export const useBuilderStore = defineStore('builder', () => {
     openContents.clear()
     savedContents.clear()
     clearOverlay()
+    clearServerBusy()
     chatError.value = null
     insufficientBalance.value = false
     localEcho.value = null
@@ -609,6 +643,7 @@ export const useBuilderStore = defineStore('builder', () => {
     phase,
     chatError,
     insufficientBalance,
+    serverBusy,
     localEcho,
     isTyping,
     suggestions,

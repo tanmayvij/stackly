@@ -1,6 +1,17 @@
 import { signOut } from 'firebase/auth'
 import { auth } from '@/lib/firebase'
 
+/**
+ * Thrown on HTTP 409 — another run holds this project's generation lock.
+ * Not a failure: that run's result will arrive via the messages listener.
+ */
+export class GenerationInProgressError extends Error {
+  constructor() {
+    super('A generation is already running for this project.')
+    this.name = 'GenerationInProgressError'
+  }
+}
+
 /** Thrown on HTTP 402 — the wallet balance is below the generation gate. */
 export class InsufficientBalanceError extends Error {
   balanceCents: number
@@ -89,7 +100,7 @@ export async function streamChat(
     throw new Error('Your session expired. Sign in again.')
   }
   if (res.status === 409) {
-    throw new Error('A generation is already running for this project.')
+    throw new GenerationInProgressError()
   }
   if (!res.ok || !res.body) {
     throw new Error(`The assistant is unavailable right now (${res.status}).`)

@@ -334,6 +334,14 @@ function send(text: string) {
         </button>
       </div>
 
+      <div
+        v-else-if="builder.serverBusy"
+        class="text-muted-foreground mb-2 flex items-center gap-2 rounded-lg border px-3 py-2 text-xs"
+      >
+        <LoaderCircle class="size-3.5 shrink-0 animate-spin" />
+        A generation is already running for this project — its result will appear here shortly.
+      </div>
+
       <div v-else-if="builder.hasDanglingUserTurn" class="mb-2">
         <button
           type="button"

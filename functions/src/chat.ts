@@ -38,6 +38,7 @@ import {
   effectiveHistory,
   readHistory,
   releaseChatLock,
+  renewChatLock,
   writeAssistantMessage,
   writeSummaryMessage,
   writeUserMessage,
@@ -228,6 +229,13 @@ export const chat = onRequest(
       res.status(409).json({error: "busy"});
       return;
     }
+    // Heartbeat the lock while this run is alive; if the instance dies the
+    // lock goes stale-stealable within a minute instead of the full TTL.
+    const lockRenewer = setInterval(() => {
+      renewChatLock(uid, projectId, requestId).catch((err) =>
+        logger.warn("failed to renew chat lock", {requestId, err}),
+      );
+    }, 20_000);
 
     const sse = new SseWriter(res);
     let sseOpen = false;
@@ -297,6 +305,7 @@ export const chat = onRequest(
         res.status(500).json({error: "internal"});
       }
     } finally {
+      clearInterval(lockRenewer);
       await releaseChatLock(uid, projectId, requestId).catch((err) =>
         logger.warn("failed to release chat lock", {requestId, err}),
       );

@@ -54,6 +54,10 @@ export interface AssistantMessageInput {
 }
 
 const LOCK_TTL_MS = 10 * 60_000;
+// A held lock whose owner hasn't renewed within this window is presumed
+// dead (crashed instance / hard-killed run) and may be stolen. The chat
+// endpoint renews every 20s while a generation is live.
+const LOCK_STALE_MS = 60_000;
 
 /**
  * Returns the project document reference.
@@ -257,8 +261,10 @@ export function effectiveHistory(all: HistoryMessage[]): EffectiveHistory {
 }
 
 /**
- * Acquires the per-project chat lock (one generation at a time). A stale
- * lock past its TTL is stolen.
+ * Acquires the per-project chat lock (one generation at a time). A lock is
+ * only honored while its owner keeps renewing it — an expired or stale
+ * (unrenewed) lock is stolen, so a crashed run blocks retries for at most
+ * LOCK_STALE_MS instead of the full TTL.
  * @param {string} uid The owner's uid.
  * @param {string} projectId The project id.
  * @param {string} requestId This request's id.
@@ -272,15 +278,44 @@ export async function acquireChatLock(
   const ref = projectRef(uid, projectId).collection("state").doc("chat");
   return getFirestore().runTransaction(async (t) => {
     const snap = await t.get(ref);
-    const expiresAt = snap.get("expiresAt") as Timestamp | undefined;
-    if (snap.exists && expiresAt && expiresAt.toMillis() > Date.now()) {
-      return false;
+    if (snap.exists) {
+      const expiresAt = snap.get("expiresAt") as Timestamp | undefined;
+      const renewedAt = snap.get("renewedAt") as Timestamp | undefined;
+      const live =
+        expiresAt !== undefined &&
+        expiresAt.toMillis() > Date.now() &&
+        renewedAt !== undefined &&
+        renewedAt.toMillis() > Date.now() - LOCK_STALE_MS;
+      if (live) return false;
     }
     t.set(ref, {
       activeRequestId: requestId,
       expiresAt: Timestamp.fromMillis(Date.now() + LOCK_TTL_MS),
+      renewedAt: Timestamp.now(),
     });
     return true;
+  });
+}
+
+/**
+ * Marks a held lock as still alive. No-op if this request no longer owns
+ * the lock.
+ * @param {string} uid The owner's uid.
+ * @param {string} projectId The project id.
+ * @param {string} requestId This request's id.
+ * @return {Promise<void>} Resolves once renewed.
+ */
+export async function renewChatLock(
+  uid: string,
+  projectId: string,
+  requestId: string,
+): Promise<void> {
+  const ref = projectRef(uid, projectId).collection("state").doc("chat");
+  await getFirestore().runTransaction(async (t) => {
+    const snap = await t.get(ref);
+    if (snap.exists && snap.get("activeRequestId") === requestId) {
+      t.update(ref, {renewedAt: Timestamp.now()});
+    }
   });
 }
 
