@@ -3,6 +3,7 @@ import { nextTick, ref, watch } from 'vue'
 import {
   ArrowUp,
   Check,
+  ChevronRight,
   FileText,
   LoaderCircle,
   RefreshCw,
@@ -10,6 +11,7 @@ import {
   Square,
   TriangleAlert,
 } from '@lucide/vue'
+import ChatFileDiff from '@/components/builder/ChatFileDiff.vue'
 import type { ChatMessageDoc } from '@/lib/chat-repo'
 import { useBuilderStore } from '@/stores/builder'
 
@@ -22,6 +24,27 @@ const scrollEl = ref<HTMLDivElement | null>(null)
 const textareaEl = ref<HTMLTextAreaElement | null>(null)
 // Question-card selections: message id → chosen choice per question index.
 const selections = ref<Record<string, Record<number, string>>>({})
+
+// Expanded diff rows (`messageId:path`) + per-version diff stats, reported
+// back by the mounted diff editors.
+const expanded = ref<Set<string>>(new Set())
+const diffStats = ref<Record<string, { additions: number; deletions: number }>>({})
+
+const statKey = (m: ChatMessageDoc, path: string) => `${m.versionN}:${path}`
+
+function toggleFile(message: ChatMessageDoc, path: string) {
+  // Failed/interrupted turns committed nothing — there is no diff to show.
+  if (message.versionN === null) return
+  const key = `${message.id}:${path}`
+  const next = new Set(expanded.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  expanded.value = next
+}
+
+function onDiffStats(m: ChatMessageDoc, path: string, s: { additions: number; deletions: number }) {
+  diffStats.value = { ...diffStats.value, [statKey(m, path)]: s }
+}
 
 function isPending(message: ChatMessageDoc) {
   return builder.pendingQuestions?.messageId === message.id
@@ -120,18 +143,50 @@ function send(text: string) {
               {{ message.content }}
             </p>
 
-            <div v-if="message.files.length" class="flex flex-wrap gap-1.5">
-              <button
-                v-for="file in message.files"
-                :key="file.path"
-                type="button"
-                class="text-muted-foreground bg-muted hover:border-border-strong hover:text-foreground flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono text-xs transition-colors"
-                :class="{ 'line-through opacity-60': file.action === 'delete' }"
-                @click="file.action === 'write' && builder.selectFile(file.path)"
-              >
-                <FileText class="size-3 shrink-0 text-sky-500" />
-                <span class="max-w-48 truncate">{{ file.path }}</span>
-              </button>
+            <div v-if="message.files.length" class="bg-card overflow-hidden rounded-lg border">
+              <div v-for="file in message.files" :key="file.path" class="border-b last:border-b-0">
+                <button
+                  type="button"
+                  class="flex w-full items-center justify-between px-3 py-2 text-left transition-colors"
+                  :class="message.versionN === null ? 'cursor-default' : 'hover:bg-muted/60 cursor-pointer'"
+                  @click="toggleFile(message, file.path)"
+                >
+                  <div class="flex min-w-0 items-center gap-1.5">
+                    <ChevronRight
+                      v-if="message.versionN !== null"
+                      class="text-muted-foreground size-3.5 shrink-0 transition-transform"
+                      :class="{ 'rotate-90': expanded.has(`${message.id}:${file.path}`) }"
+                    />
+                    <FileText class="size-3.5 shrink-0 text-sky-500" />
+                    <span
+                      class="truncate font-mono text-xs"
+                      :class="{ 'line-through opacity-60': file.action === 'delete' }"
+                    >
+                      {{ file.path }}
+                    </span>
+                  </div>
+                  <div class="flex shrink-0 items-center gap-2 font-mono text-xs">
+                    <template v-if="diffStats[statKey(message, file.path)]">
+                      <span class="text-green-500">
+                        +{{ diffStats[statKey(message, file.path)]!.additions }}
+                      </span>
+                      <span class="text-red-500">
+                        -{{ diffStats[statKey(message, file.path)]!.deletions }}
+                      </span>
+                    </template>
+                    <span v-else-if="file.action === 'delete'" class="text-red-500">deleted</span>
+                    <span v-if="message.versionN === null" class="text-muted-foreground">
+                      not applied
+                    </span>
+                  </div>
+                </button>
+                <ChatFileDiff
+                  v-if="message.versionN !== null && expanded.has(`${message.id}:${file.path}`)"
+                  :path="file.path"
+                  :version-n="message.versionN"
+                  @stats="(s) => onDiffStats(message, file.path, s)"
+                />
+              </div>
             </div>
 
             <div
