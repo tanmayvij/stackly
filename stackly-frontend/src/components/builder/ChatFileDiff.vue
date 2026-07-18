@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
 import { VueMonacoDiffEditor } from '@guolao/vue-monaco-editor'
 import type * as Monaco from 'monaco-editor'
 import { LoaderCircle } from '@lucide/vue'
@@ -67,11 +67,19 @@ watch(
   { immediate: true },
 )
 
+let disposed = false
+onBeforeUnmount(() => {
+  disposed = true
+})
+
 function onMount(editor: Monaco.editor.IStandaloneDiffEditor) {
   editor.onDidUpdateDiff(() => {
+    if (disposed) return
+    const changes = editor.getLineChanges()
+    if (!changes) return // null = diff not computed (yet, or being torn down)
     let additions = 0
     let deletions = 0
-    for (const c of editor.getLineChanges() ?? []) {
+    for (const c of changes) {
       if (c.modifiedEndLineNumber > 0) {
         additions += c.modifiedEndLineNumber - c.modifiedStartLineNumber + 1
       }
