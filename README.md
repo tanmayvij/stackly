@@ -305,6 +305,6 @@ This is the important part. The repository has a GitHub Action ([`.github/workfl
 
 ## Demo video
 
-A Loom walkthrough of the project:
+A video walkthrough of the project:
 
-> 🎥 **Loom:** 
+> 🎥 [YouTube](https://youtu.be/xnOFESsABvQ)
