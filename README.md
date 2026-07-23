@@ -300,6 +300,7 @@ This is the important part. The repository has a GitHub Action ([`.github/workfl
 - **Team management and role-based access control** within a team.
 - **Git integration** — let users sync their generated code with their own remote (GitHub, etc.).
 - **Scope-aware AI** — allow users to grant a limited set of GHL scopes and have the AI detect when it lacks the right scope (or hits a 401) and tell the user, rather than failing opaquely.
+- **Non-blocking project creation** — `createProject` currently waits on the LLM call before returning, but the LLM's output (name/description) is just metadata, not critical to creation. The project could be created immediately with a placeholder name, while the LLM call runs in the background and updates the name/description on the Firestore doc once ready.
 
 ---
 
