@@ -3,7 +3,7 @@
 **Stackly is an AI app builder for HighLevel (GoHighLevel / LeadConnector).** You describe the app you want in plain English, and Stackly's AI generates a working mini React app that talks to your HighLevel sub-account — its contacts, conversations, and calendars — through a secure server-side proxy. You can chat with the AI to iterate, edit the code by hand in an in-browser Monaco editor, preview the running app instantly (bundled entirely in the browser with `esbuild-wasm`), and roll back to any previous version. Usage is metered against a prepaid wallet topped up with Stripe.
 
 - **Live app:** https://stackly.site
-- **Cloud Functions base URL:** https://us-central1-ghl-builder-161d7.cloudfunctions.net
+- **Cloud Functions base URL:** https://asia-east2-ghl-builder-161d7.cloudfunctions.net
   - e.g. the streaming builder endpoint is `…/chat`, the runtime GHL proxy is `…/ghlProxy`, health check is `…/health`.
 
 ---
