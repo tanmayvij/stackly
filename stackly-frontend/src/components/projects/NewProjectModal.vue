@@ -12,7 +12,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
-import { DEFAULT_MODEL_ID } from '@/lib/models'
+import { DEFAULT_MODEL_ID, MAX_PROMPT_CHARS } from '@/lib/models'
 import { useProjectsStore } from '@/stores/projects'
 
 const open = defineModel<boolean>('open', { required: true })
@@ -48,6 +48,10 @@ watch(open, (isOpen) => {
 
 async function onCreate() {
   if (!prompt.value.trim() || processing.value) return
+  if (prompt.value.length > MAX_PROMPT_CHARS) {
+    errorMessage.value = `Keep your prompt under ${MAX_PROMPT_CHARS.toLocaleString()} characters.`
+    return
+  }
   errorMessage.value = null
   processing.value = true
   try {
@@ -79,9 +83,17 @@ async function onCreate() {
         <Textarea
           v-model="prompt"
           :rows="4"
+          :maxlength="MAX_PROMPT_CHARS"
           :disabled="processing"
           class="bg-muted min-h-24 resize-none"
         />
+        <p
+          v-if="prompt.length > MAX_PROMPT_CHARS * 0.9"
+          class="text-muted-foreground -mt-1 text-right text-xs tabular-nums"
+          :class="{ 'text-destructive': prompt.length >= MAX_PROMPT_CHARS }"
+        >
+          {{ prompt.length.toLocaleString() }} / {{ MAX_PROMPT_CHARS.toLocaleString() }}
+        </p>
         <div class="flex flex-wrap gap-2">
           <button
             v-for="example in EXAMPLES"
@@ -102,7 +114,10 @@ async function onCreate() {
         <ModelSelect v-model="modelId" />
         <div class="flex items-center gap-2">
           <Button variant="outline" :disabled="processing" @click="open = false">Cancel</Button>
-          <Button :disabled="!prompt.trim() || processing" @click="onCreate">
+          <Button
+            :disabled="!prompt.trim() || prompt.length > MAX_PROMPT_CHARS || processing"
+            @click="onCreate"
+          >
             <LoaderCircle v-if="processing" class="size-4 animate-spin" />
             <Sparkles v-else />
             {{ processing ? 'Creating…' : 'Create app' }}

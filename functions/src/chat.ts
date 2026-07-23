@@ -16,9 +16,12 @@ import {
   COMPACT_AT_FRACTION,
   FLASH_MODEL,
   LOW_BALANCE_THRESHOLD_CENTS,
+  MAX_ANSWER_CHARS,
+  MAX_PROMPT_CHARS,
   ModelPrice,
   OPENAI_API_KEY,
   OPENAI_BASE_URL,
+  PROJECT_ID_PATTERN,
   modelConfig,
 } from "./config";
 import {
@@ -110,6 +113,8 @@ function parseAnswers(raw: unknown): Answer[] | null {
     const choice = (item as {choice?: unknown})?.choice;
     if (typeof question !== "string" || !question.trim()) return null;
     if (typeof choice !== "string" || !choice.trim()) return null;
+    if (question.length > MAX_ANSWER_CHARS) return null;
+    if (choice.length > MAX_ANSWER_CHARS) return null;
     answers.push({question: question.trim(), choice: choice.trim()});
   }
   return answers;
@@ -180,13 +185,17 @@ export const chat = onRequest(
 
     const body = (req.body ?? {}) as Record<string, unknown>;
     const projectId = body.projectId;
-    if (typeof projectId !== "string" || !projectId) {
+    if (typeof projectId !== "string" || !PROJECT_ID_PATTERN.test(projectId)) {
       res.status(400).json({error: "invalid_request", detail: "projectId"});
       return;
     }
     const message =
       typeof body.message === "string" ? body.message.trim() : "";
     if (body.message !== undefined && !message) {
+      res.status(400).json({error: "invalid_request", detail: "message"});
+      return;
+    }
+    if (message.length > MAX_PROMPT_CHARS) {
       res.status(400).json({error: "invalid_request", detail: "message"});
       return;
     }

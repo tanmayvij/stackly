@@ -1,6 +1,11 @@
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { onCall, HttpsError } from "firebase-functions/https";
-import { MODEL_PRICING, OPENAI_API_KEY, OPENAI_BASE_URL } from "./config";
+import {
+  MAX_PROMPT_CHARS,
+  MODEL_PRICING,
+  OPENAI_API_KEY,
+  OPENAI_BASE_URL,
+} from "./config";
 import { generateProjectMeta } from "./openai";
 
 /**
@@ -26,6 +31,12 @@ export const createProject = onCall(
     const prompt = request.data?.prompt;
     if (typeof prompt !== "string" || !prompt.trim()) {
       throw new HttpsError("invalid-argument", "A prompt is required.");
+    }
+    if (prompt.length > MAX_PROMPT_CHARS) {
+      throw new HttpsError(
+        "invalid-argument",
+        `The prompt must be at most ${MAX_PROMPT_CHARS} characters.`,
+      );
     }
 
     const modelId = request.data?.modelId;

@@ -11,6 +11,11 @@ export interface LlmModel {
 
 export const DEFAULT_MODEL_ID = 'zai-org/GLM-5.2'
 
+// Max length of a user-supplied project/builder prompt — mirrors
+// functions/src/config.ts MAX_PROMPT_CHARS. Enforced server-side; the UI
+// caps input here so a valid prompt is never rejected after submission.
+export const MAX_PROMPT_CHARS = 10_000
+
 export const MODELS: LlmModel[] = [
   {
     id: 'openai/gpt-oss-120b',
