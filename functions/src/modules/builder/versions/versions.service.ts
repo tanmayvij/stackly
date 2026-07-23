@@ -7,8 +7,15 @@
 import {createHash} from "node:crypto";
 import {FieldValue, getFirestore} from "firebase-admin/firestore";
 import {getStorage} from "firebase-admin/storage";
-import {GHL_CLIENT_SHA256, GHL_CLIENT_SOURCE} from "./ghl-docs";
-import {AssistantMessageInput, assistantMessageData} from "./messages";
+import {
+  GHL_CLIENT_SHA256,
+  GHL_CLIENT_SOURCE,
+} from "../../ghl/generated-client";
+import {
+  AssistantMessageInput,
+  assistantMessageData,
+} from "../messages/messages.service";
+import {userProjectRef} from "../../../shared/firestore/refs";
 
 /** Flat file tree: full path → blob sha256. `null` marks an empty folder. */
 export type Manifest = Record<string, string | null>;
@@ -88,11 +95,7 @@ export async function readTree(
   n: number,
 ): Promise<Manifest> {
   if (n <= 0) return {};
-  const snap = await getFirestore()
-    .collection("users")
-    .doc(uid)
-    .collection("projects")
-    .doc(projectId)
+  const snap = await userProjectRef(uid, projectId)
     .collection("versions")
     .doc(String(n))
     .get();
@@ -162,11 +165,7 @@ export async function commitAiVersionAndMessage(
   message: AssistantMessageInput,
 ): Promise<CommitResult> {
   const db = getFirestore();
-  const projectRef = db
-    .collection("users")
-    .doc(uid)
-    .collection("projects")
-    .doc(projectId);
+  const projectRef = userProjectRef(uid, projectId);
 
   return db.runTransaction(async (t) => {
     const projectSnap = await t.get(projectRef);

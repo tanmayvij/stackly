@@ -1,11 +1,17 @@
 // Chat message persistence for `users/{uid}/projects/{projectId}/messages`.
-// All writes happen here (or in repo.ts for the atomic commit path) via the
-// Admin SDK — clients have read-only access per firestore.rules. Ordering
-// is by `seq`, a per-project counter stored as `lastMessageSeq` on the
-// project doc and allocated transactionally with each message.
+// All writes happen here (or in the versions service for the atomic commit
+// path) via the Admin SDK — clients have read-only access per
+// firestore.rules. Ordering is by `seq`, a per-project counter stored as
+// `lastMessageSeq` on the project doc and allocated transactionally with each
+// message.
 
 import {FieldValue, Timestamp, getFirestore} from "firebase-admin/firestore";
-import {ChatQuestion, ChatSuggestion} from "./llm-parser";
+import {ChatQuestion, ChatSuggestion} from "../parser/parser";
+import {
+  chatLockRef,
+  projectMessagesCollection,
+  userProjectRef,
+} from "../../../shared/firestore/refs";
 
 export type MessageStatus = "complete" | "interrupted" | "error";
 export type MessageErrorCode =
@@ -60,30 +66,6 @@ const LOCK_TTL_MS = 10 * 60_000;
 const LOCK_STALE_MS = 60_000;
 
 /**
- * Returns the project document reference.
- * @param {string} uid The owner's uid.
- * @param {string} projectId The project id.
- * @return {FirebaseFirestore.DocumentReference} The project doc ref.
- */
-function projectRef(uid: string, projectId: string) {
-  return getFirestore()
-    .collection("users")
-    .doc(uid)
-    .collection("projects")
-    .doc(projectId);
-}
-
-/**
- * Returns the messages collection for a project.
- * @param {string} uid The owner's uid.
- * @param {string} projectId The project id.
- * @return {FirebaseFirestore.CollectionReference} The messages collection.
- */
-function messagesCollection(uid: string, projectId: string) {
-  return projectRef(uid, projectId).collection("messages");
-}
-
-/**
  * Builds the Firestore payload for an assistant message (minus `seq` and
  * `createdAt`, which the transactional writers stamp).
  * @param {AssistantMessageInput} input The assistant message fields.
@@ -126,13 +108,13 @@ async function writeMessage(
   projectPatch?: Record<string, unknown>,
 ): Promise<{id: string; seq: number}> {
   const db = getFirestore();
-  const project = projectRef(uid, projectId);
+  const project = userProjectRef(uid, projectId);
   return db.runTransaction(async (t) => {
     const snap = await t.get(project);
     if (!snap.exists) throw new Error("Project no longer exists.");
     const seq =
       ((snap.get("lastMessageSeq") as number | undefined) ?? 0) + 1;
-    const ref = messagesCollection(uid, projectId).doc();
+    const ref = projectMessagesCollection(uid, projectId).doc();
     t.update(project, {lastMessageSeq: seq, ...projectPatch});
     t.create(ref, {...data, seq, createdAt: FieldValue.serverTimestamp()});
     return {id: ref.id, seq};
@@ -263,10 +245,10 @@ export async function readEffectiveHistory(
   uid: string,
   projectId: string,
 ): Promise<EffectiveHistory> {
-  const projectSnap = await projectRef(uid, projectId).get();
+  const projectSnap = await userProjectRef(uid, projectId).get();
   const cutoff =
     (projectSnap.get("compactedThroughSeq") as number | undefined) ?? 0;
-  const snap = await messagesCollection(uid, projectId)
+  const snap = await projectMessagesCollection(uid, projectId)
     .where("seq", ">", cutoff)
     .orderBy("seq", "asc")
     .get();
@@ -311,7 +293,7 @@ export async function acquireChatLock(
   projectId: string,
   requestId: string,
 ): Promise<boolean> {
-  const ref = projectRef(uid, projectId).collection("state").doc("chat");
+  const ref = chatLockRef(uid, projectId);
   return getFirestore().runTransaction(async (t) => {
     const snap = await t.get(ref);
     if (snap.exists) {
@@ -346,7 +328,7 @@ export async function renewChatLock(
   projectId: string,
   requestId: string,
 ): Promise<void> {
-  const ref = projectRef(uid, projectId).collection("state").doc("chat");
+  const ref = chatLockRef(uid, projectId);
   await getFirestore().runTransaction(async (t) => {
     const snap = await t.get(ref);
     if (snap.exists && snap.get("activeRequestId") === requestId) {
@@ -367,7 +349,7 @@ export async function releaseChatLock(
   projectId: string,
   requestId: string,
 ): Promise<void> {
-  const ref = projectRef(uid, projectId).collection("state").doc("chat");
+  const ref = chatLockRef(uid, projectId);
   await getFirestore().runTransaction(async (t) => {
     const snap = await t.get(ref);
     if (snap.exists && snap.get("activeRequestId") === requestId) {

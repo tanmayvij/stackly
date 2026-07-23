@@ -1,5 +1,5 @@
 // Server-side GHL proxy for generated apps. The preview iframe calls this
-// with a short-lived preview token (see preview-token.ts); the proxy owns
+// with a short-lived preview token (see modules/preview); the proxy owns
 // the real GHL credentials end-to-end: it preemptively refreshes the access
 // token, pins the connected locationId onto every request, restricts the
 // reachable surface to the three allowed API families, and forwards the
@@ -7,14 +7,16 @@
 
 import {onRequest} from "firebase-functions/https";
 import * as logger from "firebase-functions/logger";
-import {Timestamp, getFirestore} from "firebase-admin/firestore";
+import {Timestamp} from "firebase-admin/firestore";
 import {
   GHL_CLIENT_ID,
   GHL_CLIENT_SECRET,
   PREVIEW_TOKEN_SECRET,
-} from "./config";
-import {API_BASE, API_VERSION, refreshConnection} from "./ghl";
-import {verifyPreviewToken} from "./preview-token";
+} from "../../shared/config";
+import {applyCors, handlePreflight} from "../../shared/http";
+import {ghlConnectionRef} from "../../shared/firestore/refs";
+import {API_BASE, API_VERSION, refreshConnection} from "./ghl.service";
+import {verifyPreviewToken} from "../preview/preview.service";
 
 const ALLOWED_PATH = /^\/(contacts|conversations|calendars)(\/|$)/;
 const ALLOWED_METHODS = new Set(["GET", "POST", "PUT", "DELETE"]);
@@ -31,14 +33,12 @@ export const ghlProxy = onRequest(
   async (req, res) => {
     // The preview iframe is origin-null, so the only workable CORS origin
     // is the wildcard. The bearer token is the actual access control.
-    res.set("Access-Control-Allow-Origin", "*");
-    res.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-    res.set("Access-Control-Allow-Headers", "Authorization, Content-Type");
-    res.set("Access-Control-Max-Age", "3600");
-    if (req.method === "OPTIONS") {
-      res.status(204).send("");
-      return;
-    }
+    applyCors(res, {
+      origin: "*",
+      methods: "GET, POST, PUT, DELETE, OPTIONS",
+      headers: "Authorization, Content-Type",
+    });
+    if (handlePreflight(req, res)) return;
     if (!ALLOWED_METHODS.has(req.method)) {
       res.status(405).json({error: "method_not_allowed"});
       return;
@@ -64,10 +64,7 @@ export const ghlProxy = onRequest(
       return;
     }
 
-    const snap = await getFirestore()
-      .collection("ghlConnections")
-      .doc(uid)
-      .get();
+    const snap = await ghlConnectionRef(uid).get();
     if (!snap.exists) {
       res.status(409).json({error: "ghl_not_connected"});
       return;

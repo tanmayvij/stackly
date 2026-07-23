@@ -1,6 +1,6 @@
 // Incremental parser for the tagged output protocol the code-generation
-// model streams back (see prompt.ts OUTPUT PROTOCOL). Pure and I/O-free so
-// it can be unit tested against arbitrary chunk boundaries.
+// model streams back (see chat/prompt.ts OUTPUT PROTOCOL). Pure and I/O-free
+// so it can be unit tested against arbitrary chunk boundaries.
 //
 // Grammar (tolerant, line-oriented where it matters):
 //   <reply>conversational text</reply>
@@ -481,7 +481,8 @@ export const CHOICES_PER_QUESTION = 3;
 export const MAX_SUGGESTIONS = 2;
 
 // The platform-owned GHL client is injected server-side at commit time and
-// must never be written or deleted by the model (see repo.ts).
+// must never be written or deleted by the model (see
+// modules/builder/versions).
 export const PROTECTED_PATHS = new Set(["src/lib/ghl.js"]);
 
 /**

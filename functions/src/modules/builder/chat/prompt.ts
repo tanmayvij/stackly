@@ -2,15 +2,15 @@
 // SUMMARY_SYSTEM_PROMPT are frozen — byte-identical across requests — so
 // the provider's automatic prefix caching hits on every call.
 
-import { GHL_DOCS } from "./ghl-docs";
-import { HistoryMessage } from "./messages";
+import {GHL_DOCS} from "../../ghl/generated-client";
+import {HistoryMessage} from "../messages/messages.service";
 
 // A union (not a single interface) so arrays of these are assignable to
 // the openai SDK's discriminated ChatCompletionMessageParam union.
 export type LlmMessage =
-  | { role: "system"; content: string }
-  | { role: "user"; content: string }
-  | { role: "assistant"; content: string };
+  | {role: "system"; content: string}
+  | {role: "user"; content: string}
+  | {role: "assistant"; content: string};
 
 export interface ProjectFile {
   path: string;
@@ -155,8 +155,8 @@ export function buildChatMessages(
   turns: HistoryMessage[],
 ): LlmMessage[] {
   const messages: LlmMessage[] = [
-    { role: "system", content: SYSTEM_MESSAGE },
-    { role: "user", content: filesSection(files, hasGhlClient) },
+    {role: "system", content: SYSTEM_MESSAGE},
+    {role: "user", content: filesSection(files, hasGhlClient)},
   ];
   if (summary) {
     messages.push({

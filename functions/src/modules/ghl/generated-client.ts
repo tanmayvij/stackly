@@ -1,12 +1,12 @@
 // Frozen constants that ship to the model and to generated apps:
 //  - GHL_CLIENT_SOURCE: the platform-owned `src/lib/ghl.js` injected into
-//    every AI commit (see repo.ts). Generated code talks to the ghlProxy
-//    function through it and never sees real GHL tokens.
+//    every AI commit (see modules/builder/versions). Generated code talks to
+//    the ghlProxy function through it and never sees real GHL tokens.
 //  - GHL_DOCS: the condensed API reference appended to the system prompt.
 // Both are kept byte-identical across requests so the provider's prefix
 // caching hits. Endpoint shapes were reconciled against the official
 // HighLevel API docs (marketplace.gohighlevel.com/docs/ghl, 2026-07-18);
-// Version headers and locationId are injected by ghl-proxy.ts, so neither
+// Version headers and locationId are injected by the ghl proxy, so neither
 // appears here.
 
 import {createHash} from "node:crypto";

@@ -1,6 +1,14 @@
-import {getFirestore, FieldValue, Timestamp} from "firebase-admin/firestore";
-import {onCall, HttpsError} from "firebase-functions/https";
-import {GHL_CLIENT_ID, GHL_CLIENT_SECRET, GHL_REDIRECT_URI} from "./config";
+// HighLevel OAuth core: the token grant (authorization_code + refresh_token),
+// location-name lookup, connection persistence, and refresh. Tokens are
+// stored server-side only — Firestore rules deny all client access.
+
+import {FieldValue, Timestamp} from "firebase-admin/firestore";
+import {HttpsError} from "firebase-functions/https";
+import {
+  GHL_CLIENT_ID,
+  GHL_CLIENT_SECRET,
+} from "../../shared/config";
+import {ghlConnectionRef} from "../../shared/firestore/refs";
 
 const TOKEN_URL = "https://services.leadconnectorhq.com/oauth/token";
 export const API_BASE = "https://services.leadconnectorhq.com";
@@ -9,7 +17,7 @@ export const API_VERSION = "v3";
 
 // The subset of GetAccessTokenSuccessfulResponseDto we consume. All GHL tokens
 // in this app are minted with userType "Location", so `locationId` is present.
-interface GhlTokenResponse {
+export interface GhlTokenResponse {
   accessToken: string;
   refreshToken: string;
   expiresIn: number;
@@ -34,27 +42,6 @@ interface GhlConnectionDoc {
   updatedAt: Timestamp | FirebaseFirestore.FieldValue;
 }
 
-/**
- * Returns the per-user connection document `ghlConnections/{uid}`.
- * @param {string} uid The owner's uid.
- * @return {FirebaseFirestore.DocumentReference} The connection doc ref.
- */
-function connectionDoc(uid: string) {
-  return getFirestore().collection("ghlConnections").doc(uid);
-}
-
-/**
- * Rejects unauthenticated callers.
- * @param {{uid: string} | undefined} auth The callable auth context.
- * @return {string} The authenticated uid.
- */
-function requireUid(auth: { uid: string } | undefined): string {
-  if (!auth) {
-    throw new HttpsError("unauthenticated", "Sign in to connect HighLevel.");
-  }
-  return auth.uid;
-}
-
 interface TokenRequestParams {
   grantType: "authorization_code" | "refresh_token";
   // Required for authorization_code.
@@ -71,7 +58,7 @@ interface TokenRequestParams {
  * @param {TokenRequestParams} params The grant type and its inputs.
  * @return {Promise<GhlTokenResponse>} The parsed token response.
  */
-async function requestGhlToken(
+export async function requestGhlToken(
   params: TokenRequestParams,
 ): Promise<GhlTokenResponse> {
   const body = new URLSearchParams({
@@ -104,7 +91,7 @@ async function requestGhlToken(
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
       "Accept": "application/json",
-      "Version": "v3",
+      "Version": API_VERSION,
     },
     body,
   });
@@ -132,7 +119,7 @@ async function requestGhlToken(
  * @param {string} locationId The location to look up.
  * @return {Promise<string>} The location name, or the id as a fallback.
  */
-async function fetchLocationName(
+export async function fetchLocationName(
   accessToken: string,
   locationId: string,
 ): Promise<string> {
@@ -162,7 +149,7 @@ async function fetchLocationName(
  * @param {boolean} isNew Whether this is a new connection (stamps connectedAt).
  * @return {Promise<void>} Resolves once written.
  */
-async function writeConnection(
+export async function writeConnection(
   uid: string,
   token: GhlTokenResponse,
   locationName: string,
@@ -185,7 +172,7 @@ async function writeConnection(
   if (token.companyId) data.companyId = token.companyId;
   if (isNew) data.connectedAt = FieldValue.serverTimestamp();
 
-  await connectionDoc(uid).set(data, {merge: true});
+  await ghlConnectionRef(uid).set(data, {merge: true});
 }
 
 /**
@@ -195,7 +182,7 @@ async function writeConnection(
  * @return {Promise<string>} The fresh access token.
  */
 export async function refreshConnection(uid: string): Promise<string> {
-  const snap = await connectionDoc(uid).get();
+  const snap = await ghlConnectionRef(uid).get();
   const refreshToken = snap.get("refreshToken");
   if (!snap.exists || typeof refreshToken !== "string") {
     throw new HttpsError("not-found", "No HighLevel connection to refresh.");
@@ -217,78 +204,6 @@ export async function refreshConnection(uid: string): Promise<string> {
  * @param {string} scope The scope string.
  * @return {number} The scope count.
  */
-function scopeCount(scope: string): number {
+export function scopeCount(scope: string): number {
   return scope.split(" ").filter(Boolean).length;
 }
-
-// Finalizes the OAuth flow: exchanges the authorization code for tokens and
-// stores the connection under the caller's uid. Returns only non-secret status
-// for the client.
-export const exchangeGhlCode = onCall(
-  {secrets: [GHL_CLIENT_ID, GHL_CLIENT_SECRET, GHL_REDIRECT_URI]},
-  async (request) => {
-    const uid = requireUid(request.auth);
-
-    const code = request.data?.code;
-    if (typeof code !== "string" || !code) {
-      throw new HttpsError("invalid-argument", "Missing authorization code.");
-    }
-    // Must match the redirect the frontend used on the authorize screen or GHL rejects it.
-    const redirectUri = GHL_REDIRECT_URI.value();
-    if (!redirectUri) {
-      throw new HttpsError(
-        "failed-precondition",
-        "HighLevel authorization failed.",
-      );
-    }
-
-    const token = await requestGhlToken({
-      grantType: "authorization_code",
-      code,
-      redirectUri,
-    });
-    // Only sub-account (Location) installs are supported. Agency (Company)
-    // installs return a companyId with no locationId, which this app can't use.
-    if (token.userType !== "Location" || !token.locationId) {
-      throw new HttpsError(
-        "failed-precondition",
-        "Connect Stackly to a HighLevel sub-account, not an agency. " +
-        "Choose a single location on the authorization screen and retry.",
-      );
-    }
-
-    const locationName = await fetchLocationName(
-      token.accessToken,
-      token.locationId,
-    );
-    await writeConnection(uid, token, locationName, true);
-
-    return {locationName, scopesGranted: scopeCount(token.scope)};
-  },
-);
-
-// Returns the caller's current connection status (never any tokens), or null
-// if HighLevel is not connected. Used to seed the store on login.
-export const getGhlConnection = onCall(
-  {enforceAppCheck: true},
-  async (request) => {
-    const uid = requireUid(request.auth);
-    const snap = await connectionDoc(uid).get();
-    if (!snap.exists) return null;
-    const scope = (snap.get("scope") as string) || "";
-    return {
-      locationName: (snap.get("locationName") as string) || "",
-      scopesGranted: scopeCount(scope),
-    };
-  },
-);
-
-// Removes the caller's stored connection.
-export const disconnectGhl = onCall(
-  {enforceAppCheck: true},
-  async (request) => {
-    const uid = requireUid(request.auth);
-    await connectionDoc(uid).delete();
-    return {ok: true as const};
-  },
-);

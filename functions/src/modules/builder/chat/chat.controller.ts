@@ -7,12 +7,8 @@
 // free of charge.
 
 import {randomUUID} from "node:crypto";
-import {getAppCheck} from "firebase-admin/app-check";
-import {getAuth} from "firebase-admin/auth";
-import {getFirestore} from "firebase-admin/firestore";
-import {onRequest, Request} from "firebase-functions/https";
+import {onRequest} from "firebase-functions/https";
 import * as logger from "firebase-functions/logger";
-import type {Response} from "express";
 import {
   COMPACT_AT_FRACTION,
   FLASH_MODEL,
@@ -24,14 +20,18 @@ import {
   OPENAI_BASE_URL,
   PROJECT_ID_PATTERN,
   modelConfig,
-} from "./config";
+} from "../../../shared/config";
+import {verifyAppCheck, verifyBearer} from "../../../shared/auth";
+import {applyCors, handlePreflight} from "../../../shared/http";
+import {userProjectRef} from "../../../shared/firestore/refs";
+import {openaiClient} from "../../../shared/llm/client";
 import {
   ParseEvent,
   LlmStreamParser,
   PROTECTED_PATHS,
   ResponseAccumulator,
   normalizePath,
-} from "./llm-parser";
+} from "../parser/parser";
 import {
   Answer,
   AssistantMessageInput,
@@ -45,8 +45,7 @@ import {
   writeAssistantMessage,
   writeSummaryMessage,
   writeUserMessage,
-} from "./messages";
-import {openaiClient} from "./openai";
+} from "../messages/messages.service";
 import {
   ProjectFile,
   SUMMARY_SYSTEM_PROMPT,
@@ -59,8 +58,12 @@ import {
   commitAiVersionAndMessage,
   fetchBlob,
   readTree,
-} from "./repo";
-import {addTransaction, costForTokens, getBalanceForUser} from "./wallet";
+} from "../versions/versions.service";
+import {
+  addTransaction,
+  costForTokens,
+  getBalanceForUser,
+} from "../../wallet/wallet.service";
 import {SseWriter} from "./sse";
 
 // Abort the generation with margin before Cloud Run's hard timeout so the
@@ -68,56 +71,6 @@ import {SseWriter} from "./sse";
 const INTERNAL_DEADLINE_MS = 480_000;
 // Recent turns kept verbatim when the older history is compacted away.
 const COMPACT_KEEP_TURNS = 4;
-
-/**
- * Sets permissive CORS headers (the builder runs on a different origin
- * than cloudfunctions.net).
- * @param {Request} req The incoming request.
- * @param {Response} res The response to decorate.
- */
-function setCors(req: Request, res: Response): void {
-  res.set("Access-Control-Allow-Origin", req.headers.origin ?? "*");
-  res.set("Vary", "Origin");
-  res.set("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.set(
-    "Access-Control-Allow-Headers",
-    "Authorization, Content-Type, X-Firebase-AppCheck",
-  );
-  res.set("Access-Control-Max-Age", "3600");
-}
-
-/**
- * Verifies the App Check token from the X-Firebase-AppCheck header. onCall
- * enforces this automatically; this onRequest endpoint has to do it by hand.
- * @param {Request} req The incoming request.
- * @return {Promise<boolean>} Whether the request carries a valid token.
- */
-async function verifyAppCheck(req: Request): Promise<boolean> {
-  const token = req.header("X-Firebase-AppCheck");
-  if (!token) return false;
-  try {
-    await getAppCheck().verifyToken(token);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Verifies the Firebase ID token from the Authorization header.
- * @param {Request} req The incoming request.
- * @return {Promise<string | null>} The uid, or null when unauthenticated.
- */
-async function verifyBearer(req: Request): Promise<string | null> {
-  const header = req.headers.authorization ?? "";
-  if (!header.startsWith("Bearer ")) return null;
-  try {
-    const decoded = await getAuth().verifyIdToken(header.slice(7));
-    return decoded.uid;
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Validates the optional answers payload.
@@ -193,11 +146,13 @@ export const chat = onRequest(
     // minInstances: 1,
   },
   async (req, res) => {
-    setCors(req, res);
-    if (req.method === "OPTIONS") {
-      res.status(204).send("");
-      return;
-    }
+    applyCors(res, {
+      origin: req.headers.origin ?? "*",
+      methods: "POST, OPTIONS",
+      headers: "Authorization, Content-Type, X-Firebase-AppCheck",
+      varyOrigin: true,
+    });
+    if (handlePreflight(req, res)) return;
     if (req.method !== "POST") {
       res.status(405).json({error: "method_not_allowed"});
       return;
@@ -236,12 +191,7 @@ export const chat = onRequest(
       return;
     }
 
-    const projectSnap = await getFirestore()
-      .collection("users")
-      .doc(uid)
-      .collection("projects")
-      .doc(projectId)
-      .get();
+    const projectSnap = await userProjectRef(uid, projectId).get();
     if (!projectSnap.exists || projectSnap.get("deleted") === true) {
       res.status(404).json({error: "project_not_found"});
       return;

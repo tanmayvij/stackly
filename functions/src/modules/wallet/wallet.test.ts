@@ -1,12 +1,12 @@
-// Self-running unit tests for the pure billing math in wallet.ts. Run with
-// plain Node (no framework): `node lib/test/wallet.test.js`. Exits non-zero
-// on the first failure. The ledger read/write paths (addTransaction dedup,
-// getBalanceForUser) run inside Firestore transactions and belong in an
-// emulator-backed test, not here.
+// Self-running unit tests for the pure billing math in wallet.service.ts. Run
+// with plain Node (no framework): `node lib/modules/wallet/wallet.test.js`.
+// Exits non-zero on the first failure. The ledger read/write paths
+// (addTransaction dedup, getBalanceForUser) run inside Firestore transactions
+// and belong in an emulator-backed test, not here.
 
 import assert from "node:assert";
-import {costForTokens} from "../wallet";
-import {MODEL_PRICING} from "../config";
+import {costForTokens} from "./wallet.service";
+import {MODEL_PRICING} from "../../shared/config";
 
 const GLM = "zai-org/GLM-5.2"; // 400 cents / 1M tokens
 const FLASH = "deepseek-ai/DeepSeek-V4-Flash"; // 50 cents / 1M tokens

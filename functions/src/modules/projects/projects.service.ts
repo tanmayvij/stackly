@@ -1,5 +1,5 @@
-import OpenAI from "openai";
-import { FLASH_MODEL, OPENAI_API_KEY, OPENAI_BASE_URL } from "./config";
+import {FLASH_MODEL} from "../../shared/config";
+import {openaiClient} from "../../shared/llm/client";
 
 // Fast + cheap; project naming is a small, latency-sensitive request.
 const META_MODEL = FLASH_MODEL;
@@ -17,17 +17,6 @@ export interface ProjectMeta {
 }
 
 /**
- * Lazily constructs the OpenAI-compatible client from runtime secrets.
- * @return {OpenAI} A configured client pointed at OPENAI_BASE_URL.
- */
-export function openaiClient(): OpenAI {
-  return new OpenAI({
-    apiKey: OPENAI_API_KEY.value(),
-    baseURL: OPENAI_BASE_URL.value(),
-  });
-}
-
-/**
  * Turns a user's initial project prompt into a name and one-line description
  * via a single chat-completions call. The static instruction is sent as the
  * system message (cacheable prefix) and the prompt as the user message.
@@ -39,10 +28,10 @@ export async function generateProjectMeta(
 ): Promise<ProjectMeta> {
   const completion = await openaiClient().chat.completions.create({
     model: META_MODEL,
-    response_format: { type: "json_object" },
+    response_format: {type: "json_object"},
     messages: [
-      { role: "system", content: META_SYSTEM_PROMPT },
-      { role: "user", content: prompt },
+      {role: "system", content: META_SYSTEM_PROMPT},
+      {role: "user", content: prompt},
     ],
   });
 
@@ -61,5 +50,5 @@ export async function generateProjectMeta(
   const description =
     typeof parsed.description === "string" ? parsed.description.trim() : "";
 
-  return { name, description };
+  return {name, description};
 }

@@ -1,11 +1,11 @@
 // Self-running unit tests for the pure conversation-resolution logic in
-// messages.ts. Run with plain Node (no framework):
-// `node lib/test/messages.test.js`. Exits non-zero on the first failure.
-// The persistence paths (writeMessage, locks) run inside Firestore
-// transactions and belong in an emulator-backed test, not here.
+// messages.service.ts. Run with plain Node (no framework):
+// `node lib/modules/builder/messages/messages.test.js`. Exits non-zero on the
+// first failure. The persistence paths (writeMessage, locks) run inside
+// Firestore transactions and belong in an emulator-backed test, not here.
 
 import assert from "node:assert";
-import {HistoryMessage, effectiveHistory} from "../messages";
+import {HistoryMessage, effectiveHistory} from "./messages.service";
 
 /**
  * Builds a HistoryMessage with sensible defaults for the fields
