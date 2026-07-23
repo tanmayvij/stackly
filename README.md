@@ -80,21 +80,29 @@ stackly/
 ├─ functions/              # Cloud Functions backend (TypeScript → lib/)
 │  ├─ .secret.example       # secret names required by the backend
 │  └─ src/
-│     ├─ index.ts           # exports every function
-│     ├─ app.ts             # initializeApp + setGlobalOptions
-│     ├─ config.ts          # secret definitions, model pricing, thresholds
-│     ├─ wallet.ts          # Stripe top-ups + the billing ledger
-│     ├─ ghl.ts             # HighLevel OAuth token exchange
-│     ├─ ghl-proxy.ts       # runtime GHL API proxy for generated apps
-│     ├─ preview-token.ts   # short-lived HMAC tokens for the preview iframe
-│     ├─ projects.ts        # createProject (AI names/describes the app)
-│     ├─ chat.ts            # SSE-streaming builder chat (one turn = one version)
-│     ├─ openai.ts          # OpenAI-compatible LLM client
-│     ├─ repo.ts            # server-side "mini-git" (blobs + versions)
-│     ├─ messages.ts        # chat transcript + per-project generation lock
-│     ├─ llm-parser.ts      # incremental parser for the model's streamed output
-│     ├─ prompt.ts, ghl-docs.ts  # prompt assembly + injected GHL API docs
-│     └─ test/              # node test files (llm-parser, wallet, messages)
+│     ├─ index.ts               # single deploy registry: re-exports every function
+│     ├─ core/
+│     │  └─ bootstrap.ts        # initializeApp + setGlobalOptions (side-effect import)
+│     ├─ shared/                # cross-cutting utilities used by all modules
+│     │  ├─ auth.ts              # ID-token verification for HTTP endpoints
+│     │  ├─ http.ts              # shared HTTP/SSE helpers
+│     │  ├─ config/              # secrets, model pricing, input limits (barrel export)
+│     │  ├─ firestore/refs.ts    # typed Firestore document/collection refs
+│     │  └─ llm/client.ts        # OpenAI-compatible LLM client factory
+│     └─ modules/                # one folder per feature; controllers wire to index.ts
+│        ├─ ops/health.controller.ts
+│        ├─ wallet/              # controller + service + Stripe client + types + tests
+│        │                       # (getCurrentBalance, createTopUpIntent, confirmTopUp)
+│        ├─ ghl/                 # OAuth token exchange + connection mgmt + runtime proxy
+│        │                       # (exchangeGhlCode, getGhlConnection, disconnectGhl,
+│        │                       #  ghlProxy) + generated GHL client + injected docs
+│        ├─ projects/            # createProject (AI names/describes the app)
+│        ├─ preview/             # mintPreviewToken (short-lived HMAC for iframe)
+│        └─ builder/             # AI code-generation chat
+│           ├─ chat/             # chat.controller (SSE), prompt assembly, sse helpers
+│           ├─ messages/         # chat transcript + per-project generation lock + tests
+│           ├─ parser/           # incremental parser for the model's streamed output
+│           └─ versions/         # server-side "mini-git" (blobs + immutable versions)
 │
 └─ stackly-frontend/       # Vue SPA
    ├─ .env.example
@@ -117,7 +125,7 @@ stackly/
 
 **Authentication.** Email/password registration sends a verification email; a router guard forces unverified users to `/verify-email` and away from the app until they confirm. Google SSO accounts arrive already verified and skip that gate. Auth state is held in a Pinia store and gates all protected routes.
 
-**Wallet & billing.** Balances are integer **cents** and are only ever computed on the server. The wallet is a ledger: `wallets/{uid}/transactions/{id}` holds `CREDIT` (Stripe top-ups) and `DEBIT` (LLM usage) entries, and `getCurrentBalance` sums the whole subcollection — there is no stored balance field. Writes go through a single deduplicated path keyed by `refId` (the Stripe PaymentIntent id for credits, `chat:{requestId}` / `compact:{requestId}` for debits), so retries never double-count. Top-ups use Stripe's hosted PaymentElement (`createTopUpIntent` → confirm on the client → `confirmTopUp` verifies with Stripe and credits `amount_received`). Ledger docs are unreadable by clients — the balance only ever reaches the UI through the callable.
+**Wallet & billing.** Balances are integer **cents** and are only ever computed on the server. The wallet is a ledger: `wallets/{uid}/transactions/{id}` holds `CREDIT` (Stripe top-ups) and `DEBIT` (LLM usage) entries, and each write transactionally advances a running `balanceCents` counter on the parent `wallets/{uid}` doc (stamping a `balanceAfter` snapshot on every transaction as an audit trail), so `getCurrentBalance` is an O(1) single-document read while the balance stays fully re-derivable from the transaction log. Writes go through a single deduplicated path keyed by `refId` (the Stripe PaymentIntent id for credits, `chat:{requestId}` / `compact:{requestId}` for debits), so retries never double-count. Top-ups use Stripe's hosted PaymentElement (`createTopUpIntent` → confirm on the client → `confirmTopUp` verifies with Stripe and credits `amount_received`). Ledger docs are unreadable by clients — the balance only ever reaches the UI through the callable.
 
 **HighLevel OAuth.** `exchangeGhlCode` swaps the OAuth authorization code for Location-scoped tokens and stores them in `ghlConnections/{uid}` — server-side only; Firestore rules deny all client access to tokens. Only sub-account (Location) installs are supported; agency installs are rejected. A friendly location name is fetched (via the `locations.readonly` scope) purely for UX.
 
@@ -232,7 +240,7 @@ The active project is pinned in `.firebaserc` (`ghl-builder-161d7`). With the CL
 
 ### 3. DeepInfra (LLM provider)
 
-The models are served by **DeepInfra**. After signing up and recharging the wallet for initial use, an API key was generated and stored as the `OPENAI_API_KEY` secret; DeepInfra is reached through its **OpenAI-compatible API**, with the endpoint set in the `OPENAI_BASE_URL` secret. The backend uses the standard `openai` SDK pointed at that base URL. Configured models and per-million-token pricing (in cents) live in `functions/src/config.ts`:
+The models are served by **DeepInfra**. After signing up and recharging the wallet for initial use, an API key was generated and stored as the `OPENAI_API_KEY` secret; DeepInfra is reached through its **OpenAI-compatible API**, with the endpoint set in the `OPENAI_BASE_URL` secret. The backend uses the standard `openai` SDK pointed at that base URL. Configured models and per-million-token pricing (in cents) live in `functions/src/shared/config/models.ts`:
 
 | Model | ¢ / 1M tokens | Context window |
 |---|---|---|
@@ -281,7 +289,7 @@ This is the important part. The repository has a GitHub Action ([`.github/workfl
 ## Architecture decisions
 
 - **Content-addressed "mini-git" for project files.** File bytes are stored once in Cloud Storage keyed by their `sha256`, versions are immutable path→hash manifests, and `headVersion` is the single source of truth. Unchanged files are shared across versions for free, so deep history is cheap and restores upload zero bytes. Append-only, immutable history removes write contention. Because a version is written once and never mutated, a manual edit and an AI edit can never conflict each other. Each just appends. Diffing is a pure set/hash comparison; content is only fetched for line-level views.
-- **The balance is a ledger sum, never a mutable counter.** All wallet writes flow through one path deduplicated on `refId` inside a Firestore transaction, so retried Stripe polls and repeated chat debits are idempotent and the balance can always be re-derived from the transaction log.
+- **The balance is a maintained counter that stays reconcilable with an append-only ledger.** All wallet writes flow through one path deduplicated on `refId` inside a Firestore transaction, which advances a running `balanceCents` counter (read in O(1)) while stamping a `balanceAfter` audit value on each entry — so retried Stripe polls and repeated chat debits are idempotent and the balance can always be re-derived from the transaction log.
 - **Money and secrets never leak to the client.** Token/cost data is backend-only; the ledger is unreadable by clients; the balance surfaces solely through the `getCurrentBalance` callable; and HighLevel tokens live server-side, reachable only through the proxy.
 - **SSE over raw HTTP for real streaming.** Callables buffer, so the builder chat is an `onRequest` function that hits the direct Cloud Functions URL (never a Hosting rewrite, which would buffer), with heartbeats and no-buffering headers so tokens reach the UI as they're generated.
 - **Firestore is the source of truth; the stream is a render-only overlay.** Finished turns are reconciled from the `messages` listener, so a dropped connection, a second tab, or a refresh always converges on the same state — the stream just makes it feel live.
@@ -296,10 +304,10 @@ This is the important part. The repository has a GitHub Action ([`.github/workfl
 ## Future improvements
 
 - **Richer billing** — saved cards, auto-recharge, payment history, and downloadable invoices.
-- **Faster balance calculation** — today `getCurrentBalance` aggregates across **all** of a user's ledger docs. Carrying a balance forward at each month's close would make the running total cheap to compute.
 - **Team management and role-based access control** within a team.
 - **Git integration** — let users sync their generated code with their own remote (GitHub, etc.).
 - **Scope-aware AI** — allow users to grant a limited set of GHL scopes and have the AI detect when it lacks the right scope (or hits a 401) and tell the user, rather than failing opaquely.
+- **Non-blocking project creation** — `createProject` currently waits on the LLM call before returning, but the LLM's output (name/description) is just metadata, not critical to creation. The project could be created immediately with a placeholder name, while the LLM call runs in the background and updates the name/description on the Firestore doc once ready.
 
 ---
 

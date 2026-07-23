@@ -1,6 +1,6 @@
-// Self-running unit tests for llm-parser.ts. Executed with plain Node
-// (no framework): `npm test` → `node lib/test/llm-parser.test.js`. Exits
-// non-zero on the first failure.
+// Self-running unit tests for parser.ts. Executed with plain Node
+// (no framework): `npm test` → `node lib/modules/builder/parser/parser.test.js`.
+// Exits non-zero on the first failure.
 
 import assert from "node:assert";
 import {
@@ -10,7 +10,7 @@ import {
   ParseFinish,
   ResponseAccumulator,
   normalizePath,
-} from "../llm-parser";
+} from "./parser";
 
 interface ParseRun {
   events: ParseEvent[];
@@ -242,9 +242,9 @@ const TESTS: Array<[string, () => void]> = [
         "<suggest label=\"C\">c</suggest>";
       const {result} = run(input, 10);
       assert.equal(result.suggestions.length, 2);
-      assert.equal(result.suggestions[0].label,
+      assert.equal(result.suggestions[0]?.label,
         "Show unread conversations first");
-      assert.equal(result.suggestions[1].label, "B");
+      assert.equal(result.suggestions[1]?.label, "B");
     },
   ],
   [

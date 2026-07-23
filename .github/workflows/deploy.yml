@@ -7,17 +7,22 @@ on:
 jobs:
   build_frontend:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: stackly-frontend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Lint frontend
+        run: npx oxlint . && npx eslint .
       - name: Inject .env
-        working-directory: stackly-frontend
         run: echo "${{ secrets.VITE_ENV }}" > .env
       - name: Build frontend
-        working-directory: stackly-frontend
-        run: npm ci && npm run build
+        run: npm run build
       - uses: actions/upload-artifact@v4
         with:
           name: frontend-dist
@@ -25,14 +30,22 @@ jobs:
 
   prepare_functions:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: functions
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - name: Install and build functions
-        working-directory: functions
-        run: npm ci && npm run build
+      - name: Install functions dependencies
+        run: npm ci
+      - name: Lint functions
+        run: npm run lint
+      - name: Test functions
+        run: npm test
+      - name: Build functions
+        run: npm run build
       - uses: actions/upload-artifact@v4
         with:
           name: functions-build

@@ -1,3 +1,4 @@
+import './lib/env'
 import './styles.css'
 
 import { createApp, watch } from 'vue'

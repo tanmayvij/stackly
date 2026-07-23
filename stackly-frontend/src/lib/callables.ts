@@ -56,7 +56,7 @@ export type GhlConnectionStatus = { locationName: string; scopesGranted: number 
  * server-side) and returns the connected location's name and scope count.
  */
 export const exchangeGhlCode = callable<
-  { code: string; redirectUri: string },
+  { code: string },
   GhlConnectionStatus
 >('exchangeGhlCode')
 

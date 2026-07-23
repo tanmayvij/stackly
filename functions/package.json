@@ -3,7 +3,7 @@
   "scripts": {
     "lint": "eslint --ext .js,.ts .",
     "build": "tsc",
-    "test": "npm run build && node lib/test/llm-parser.test.js && node lib/test/wallet.test.js && node lib/test/messages.test.js",
+    "test": "npm run build && node lib/modules/builder/parser/parser.test.js && node lib/modules/wallet/wallet.test.js && node lib/modules/builder/messages/messages.test.js",
     "build:watch": "tsc --watch",
     "serve": "npm run build && firebase emulators:start --only functions,firestore,auth,storage",
     "shell": "npm run build && firebase functions:shell",

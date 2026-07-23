@@ -3,9 +3,15 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
     // Content-addressed file blobs, scoped per user: {uid}/{projectId}/{sha256}.
-    // Blobs are immutable (name = content hash), so writes only ever create.
+    // Blobs are immutable (name = content hash), so the client may only read or
+    // create — never overwrite or delete. Allowing `write` (which bundles
+    // update + delete) would let a client replace {uid}/{pid}/sha256 with
+    // content that no longer matches the hash, or delete blobs, corrupting the
+    // immutable audit trail. `create` fires only when no object exists at the
+    // path, so an existing blob can never be mutated or removed by a client.
+    // (Server-side rewrites use the Admin SDK, which bypasses these rules.)
     match /{uid}/{projectId}/{blob} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
+      allow read, create: if request.auth != null && request.auth.uid == uid;
     }
 
     match /{allPaths=**} {

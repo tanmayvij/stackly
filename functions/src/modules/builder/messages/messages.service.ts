@@ -1,11 +1,17 @@
 // Chat message persistence for `users/{uid}/projects/{projectId}/messages`.
-// All writes happen here (or in repo.ts for the atomic commit path) via the
-// Admin SDK — clients have read-only access per firestore.rules. Ordering
-// is by `seq`, a per-project counter stored as `lastMessageSeq` on the
-// project doc and allocated transactionally with each message.
+// All writes happen here (or in the versions service for the atomic commit
+// path) via the Admin SDK — clients have read-only access per
+// firestore.rules. Ordering is by `seq`, a per-project counter stored as
+// `lastMessageSeq` on the project doc and allocated transactionally with each
+// message.
 
 import {FieldValue, Timestamp, getFirestore} from "firebase-admin/firestore";
-import {ChatQuestion, ChatSuggestion} from "./llm-parser";
+import {ChatQuestion, ChatSuggestion} from "../parser/parser";
+import {
+  chatLockRef,
+  projectMessagesCollection,
+  userProjectRef,
+} from "../../../shared/firestore/refs";
 
 export type MessageStatus = "complete" | "interrupted" | "error";
 export type MessageErrorCode =
@@ -60,30 +66,6 @@ const LOCK_TTL_MS = 10 * 60_000;
 const LOCK_STALE_MS = 60_000;
 
 /**
- * Returns the project document reference.
- * @param {string} uid The owner's uid.
- * @param {string} projectId The project id.
- * @return {FirebaseFirestore.DocumentReference} The project doc ref.
- */
-function projectRef(uid: string, projectId: string) {
-  return getFirestore()
-    .collection("users")
-    .doc(uid)
-    .collection("projects")
-    .doc(projectId);
-}
-
-/**
- * Returns the messages collection for a project.
- * @param {string} uid The owner's uid.
- * @param {string} projectId The project id.
- * @return {FirebaseFirestore.CollectionReference} The messages collection.
- */
-function messagesCollection(uid: string, projectId: string) {
-  return projectRef(uid, projectId).collection("messages");
-}
-
-/**
  * Builds the Firestore payload for an assistant message (minus `seq` and
  * `createdAt`, which the transactional writers stamp).
  * @param {AssistantMessageInput} input The assistant message fields.
@@ -115,22 +97,25 @@ export function assistantMessageData(
  * @param {string} uid The owner's uid.
  * @param {string} projectId The project id.
  * @param {Record<string, unknown>} data The payload (without seq/createdAt).
+ * @param {Record<string, unknown>} [projectPatch] Extra fields to merge into
+ *   the project doc in the same transaction (e.g. the compaction cursor).
  * @return {Promise<{id: string, seq: number}>} The new doc id and seq.
  */
 async function writeMessage(
   uid: string,
   projectId: string,
   data: Record<string, unknown>,
+  projectPatch?: Record<string, unknown>,
 ): Promise<{id: string; seq: number}> {
   const db = getFirestore();
-  const project = projectRef(uid, projectId);
+  const project = userProjectRef(uid, projectId);
   return db.runTransaction(async (t) => {
     const snap = await t.get(project);
     if (!snap.exists) throw new Error("Project no longer exists.");
     const seq =
       ((snap.get("lastMessageSeq") as number | undefined) ?? 0) + 1;
-    const ref = messagesCollection(uid, projectId).doc();
-    t.update(project, {lastMessageSeq: seq});
+    const ref = projectMessagesCollection(uid, projectId).doc();
+    t.update(project, {lastMessageSeq: seq, ...projectPatch});
     t.create(ref, {...data, seq, createdAt: FieldValue.serverTimestamp()});
     return {id: ref.id, seq};
   });
@@ -199,31 +184,33 @@ export function writeSummaryMessage(
     requestId: string;
   },
 ): Promise<{id: string; seq: number}> {
-  return writeMessage(uid, projectId, {
-    kind: "summary",
-    role: "system",
-    content: input.content,
-    compactedThroughSeq: input.compactedThroughSeq,
-    tokensConsumed: input.tokensConsumed,
-    costCents: input.costCents,
-    requestId: input.requestId,
-  });
+  return writeMessage(
+    uid,
+    projectId,
+    {
+      kind: "summary",
+      role: "system",
+      content: input.content,
+      compactedThroughSeq: input.compactedThroughSeq,
+      tokensConsumed: input.tokensConsumed,
+      costCents: input.costCents,
+      requestId: input.requestId,
+    },
+    // Cursor read by readEffectiveHistory to bound the per-turn read to
+    // messages after the latest compaction instead of the whole transcript.
+    {compactedThroughSeq: input.compactedThroughSeq},
+  );
 }
 
 /**
- * Reads the full transcript ordered by seq.
- * @param {string} uid The owner's uid.
- * @param {string} projectId The project id.
- * @return {Promise<HistoryMessage[]>} All messages, oldest first.
+ * Maps a message doc to the prompt-ready {@link HistoryMessage} shape.
+ * @param {FirebaseFirestore.QueryDocumentSnapshot} d The message doc.
+ * @return {HistoryMessage} The parsed message.
  */
-export async function readHistory(
-  uid: string,
-  projectId: string,
-): Promise<HistoryMessage[]> {
-  const snap = await messagesCollection(uid, projectId)
-    .orderBy("seq", "asc")
-    .get();
-  return snap.docs.map((d) => ({
+function mapMessageDoc(
+  d: FirebaseFirestore.QueryDocumentSnapshot,
+): HistoryMessage {
+  return {
     id: d.id,
     kind: (d.get("kind") as HistoryMessage["kind"]) ?? "chat",
     role: (d.get("role") as HistoryMessage["role"]) ?? "user",
@@ -234,7 +221,38 @@ export async function readHistory(
     status: (d.get("status") as MessageStatus) ?? null,
     contextTokens: (d.get("contextTokens") as number) ?? 0,
     compactedThroughSeq: (d.get("compactedThroughSeq") as number) ?? 0,
-  }));
+  };
+}
+
+/**
+ * Reads the prompt-ready conversation without scanning the whole transcript.
+ *
+ * The per-turn read is bounded to messages after the latest compaction: we
+ * read the `compactedThroughSeq` cursor off the project doc (maintained by
+ * {@link writeSummaryMessage}) and fetch only `seq > cutoff`. This keeps the
+ * read cost O(turns since last compaction) instead of O(total turns), so a
+ * long-lived project doesn't pay to re-read its entire — already summarized —
+ * history on every message.
+ *
+ * A never-compacted project has cutoff 0 and reads all its turns, which is
+ * exactly the (small) set the prompt needs. {@link effectiveHistory} then
+ * resolves the summary + turns from the bounded window.
+ * @param {string} uid The owner's uid.
+ * @param {string} projectId The project id.
+ * @return {Promise<EffectiveHistory>} The summary + turns for the prompt.
+ */
+export async function readEffectiveHistory(
+  uid: string,
+  projectId: string,
+): Promise<EffectiveHistory> {
+  const projectSnap = await userProjectRef(uid, projectId).get();
+  const cutoff =
+    (projectSnap.get("compactedThroughSeq") as number | undefined) ?? 0;
+  const snap = await projectMessagesCollection(uid, projectId)
+    .where("seq", ">", cutoff)
+    .orderBy("seq", "asc")
+    .get();
+  return effectiveHistory(snap.docs.map(mapMessageDoc));
 }
 
 export interface EffectiveHistory {
@@ -275,7 +293,7 @@ export async function acquireChatLock(
   projectId: string,
   requestId: string,
 ): Promise<boolean> {
-  const ref = projectRef(uid, projectId).collection("state").doc("chat");
+  const ref = chatLockRef(uid, projectId);
   return getFirestore().runTransaction(async (t) => {
     const snap = await t.get(ref);
     if (snap.exists) {
@@ -310,7 +328,7 @@ export async function renewChatLock(
   projectId: string,
   requestId: string,
 ): Promise<void> {
-  const ref = projectRef(uid, projectId).collection("state").doc("chat");
+  const ref = chatLockRef(uid, projectId);
   await getFirestore().runTransaction(async (t) => {
     const snap = await t.get(ref);
     if (snap.exists && snap.get("activeRequestId") === requestId) {
@@ -331,7 +349,7 @@ export async function releaseChatLock(
   projectId: string,
   requestId: string,
 ): Promise<void> {
-  const ref = projectRef(uid, projectId).collection("state").doc("chat");
+  const ref = chatLockRef(uid, projectId);
   await getFirestore().runTransaction(async (t) => {
     const snap = await t.get(ref);
     if (snap.exists && snap.get("activeRequestId") === requestId) {

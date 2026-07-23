@@ -1,9 +1,33 @@
-import "./app";
+// Firebase function registry. Every deployed function is re-exported here
+// by its exact name (the deployed identity: callable names + HTTP URLs),
+// sourced from its module's controller. The bootstrap import runs first so
+// initializeApp()/setGlobalOptions() are in effect before any handler loads.
 
-export {health} from "./health";
-export {getCurrentBalance, createTopUpIntent, confirmTopUp} from "./wallet";
-export {exchangeGhlCode, getGhlConnection, disconnectGhl} from "./ghl";
-export {createProject} from "./projects";
-export {chat} from "./chat";
-export {ghlProxy} from "./ghl-proxy";
-export {mintPreviewToken} from "./preview-token";
+import "./core/bootstrap";
+
+// ops
+export {health} from "./modules/ops/health.controller";
+
+// wallet
+export {
+  getCurrentBalance,
+  createTopUpIntent,
+  confirmTopUp,
+} from "./modules/wallet/wallet.controller";
+
+// ghl
+export {
+  exchangeGhlCode,
+  getGhlConnection,
+  disconnectGhl,
+} from "./modules/ghl/ghl.controller";
+export {ghlProxy} from "./modules/ghl/proxy.controller";
+
+// projects
+export {createProject} from "./modules/projects/projects.controller";
+
+// builder (AI code-generation chat)
+export {chat} from "./modules/builder/chat/chat.controller";
+
+// preview
+export {mintPreviewToken} from "./modules/preview/preview.controller";

@@ -7,27 +7,31 @@
 // free of charge.
 
 import {randomUUID} from "node:crypto";
-import {getAuth} from "firebase-admin/auth";
-import {getFirestore} from "firebase-admin/firestore";
-import {onRequest, Request} from "firebase-functions/https";
+import {onRequest} from "firebase-functions/https";
 import * as logger from "firebase-functions/logger";
-import type {Response} from "express";
 import {
   COMPACT_AT_FRACTION,
   FLASH_MODEL,
   LOW_BALANCE_THRESHOLD_CENTS,
+  MAX_ANSWER_CHARS,
+  MAX_PROMPT_CHARS,
   ModelPrice,
   OPENAI_API_KEY,
   OPENAI_BASE_URL,
+  PROJECT_ID_PATTERN,
   modelConfig,
-} from "./config";
+} from "../../../shared/config";
+import {verifyAppCheck, verifyBearer} from "../../../shared/auth";
+import {applyCors, handlePreflight} from "../../../shared/http";
+import {userProjectRef} from "../../../shared/firestore/refs";
+import {openaiClient} from "../../../shared/llm/client";
 import {
   ParseEvent,
   LlmStreamParser,
   PROTECTED_PATHS,
   ResponseAccumulator,
   normalizePath,
-} from "./llm-parser";
+} from "../parser/parser";
 import {
   Answer,
   AssistantMessageInput,
@@ -35,15 +39,13 @@ import {
   HistoryMessage,
   MessageErrorCode,
   acquireChatLock,
-  effectiveHistory,
-  readHistory,
+  readEffectiveHistory,
   releaseChatLock,
   renewChatLock,
   writeAssistantMessage,
   writeSummaryMessage,
   writeUserMessage,
-} from "./messages";
-import {openaiClient} from "./openai";
+} from "../messages/messages.service";
 import {
   ProjectFile,
   SUMMARY_SYSTEM_PROMPT,
@@ -56,8 +58,12 @@ import {
   commitAiVersionAndMessage,
   fetchBlob,
   readTree,
-} from "./repo";
-import {addTransaction, costForTokens, getBalanceForUser} from "./wallet";
+} from "../versions/versions.service";
+import {
+  addTransaction,
+  costForTokens,
+  getBalanceForUser,
+} from "../../wallet/wallet.service";
 import {SseWriter} from "./sse";
 
 // Abort the generation with margin before Cloud Run's hard timeout so the
@@ -65,36 +71,6 @@ import {SseWriter} from "./sse";
 const INTERNAL_DEADLINE_MS = 480_000;
 // Recent turns kept verbatim when the older history is compacted away.
 const COMPACT_KEEP_TURNS = 4;
-
-/**
- * Sets permissive CORS headers (the builder runs on a different origin
- * than cloudfunctions.net).
- * @param {Request} req The incoming request.
- * @param {Response} res The response to decorate.
- */
-function setCors(req: Request, res: Response): void {
-  res.set("Access-Control-Allow-Origin", req.headers.origin ?? "*");
-  res.set("Vary", "Origin");
-  res.set("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.set("Access-Control-Allow-Headers", "Authorization, Content-Type");
-  res.set("Access-Control-Max-Age", "3600");
-}
-
-/**
- * Verifies the Firebase ID token from the Authorization header.
- * @param {Request} req The incoming request.
- * @return {Promise<string | null>} The uid, or null when unauthenticated.
- */
-async function verifyBearer(req: Request): Promise<string | null> {
-  const header = req.headers.authorization ?? "";
-  if (!header.startsWith("Bearer ")) return null;
-  try {
-    const decoded = await getAuth().verifyIdToken(header.slice(7));
-    return decoded.uid;
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Validates the optional answers payload.
@@ -110,6 +86,8 @@ function parseAnswers(raw: unknown): Answer[] | null {
     const choice = (item as {choice?: unknown})?.choice;
     if (typeof question !== "string" || !question.trim()) return null;
     if (typeof choice !== "string" || !choice.trim()) return null;
+    if (question.length > MAX_ANSWER_CHARS) return null;
+    if (choice.length > MAX_ANSWER_CHARS) return null;
     answers.push({question: question.trim(), choice: choice.trim()});
   }
   return answers;
@@ -134,8 +112,9 @@ function renderAnswers(answers: Answer[]): string {
  */
 function versionTitle(turns: HistoryMessage[]): string {
   for (let i = turns.length - 1; i >= 0; i--) {
-    if (turns[i].role === "user") {
-      const line = turns[i].content.replace(/\s+/g, " ").trim();
+    const turn = turns[i];
+    if (turn?.role === "user") {
+      const line = turn.content.replace(/\s+/g, " ").trim();
       if (line) return line.length > 60 ? `${line.slice(0, 57)}...` : line;
     }
   }
@@ -160,15 +139,27 @@ export const chat = onRequest(
     secrets: [OPENAI_API_KEY, OPENAI_BASE_URL],
     timeoutSeconds: 540,
     memory: "1GiB",
+    concurrency: 8,
+    maxInstances: 20,
+    // minInstances removes cold-start latency, but bills
+    // for an always-warm 1GiB instance. Cost trade-off, revisit when budget allows.
+    // minInstances: 1,
   },
   async (req, res) => {
-    setCors(req, res);
-    if (req.method === "OPTIONS") {
-      res.status(204).send("");
-      return;
-    }
+    applyCors(res, {
+      origin: req.headers.origin ?? "*",
+      methods: "POST, OPTIONS",
+      headers: "Authorization, Content-Type, X-Firebase-AppCheck",
+      varyOrigin: true,
+    });
+    if (handlePreflight(req, res)) return;
     if (req.method !== "POST") {
       res.status(405).json({error: "method_not_allowed"});
+      return;
+    }
+
+    if (!(await verifyAppCheck(req))) {
+      res.status(401).json({error: "app_check_failed"});
       return;
     }
 
@@ -180,7 +171,7 @@ export const chat = onRequest(
 
     const body = (req.body ?? {}) as Record<string, unknown>;
     const projectId = body.projectId;
-    if (typeof projectId !== "string" || !projectId) {
+    if (typeof projectId !== "string" || !PROJECT_ID_PATTERN.test(projectId)) {
       res.status(400).json({error: "invalid_request", detail: "projectId"});
       return;
     }
@@ -190,18 +181,17 @@ export const chat = onRequest(
       res.status(400).json({error: "invalid_request", detail: "message"});
       return;
     }
+    if (message.length > MAX_PROMPT_CHARS) {
+      res.status(400).json({error: "invalid_request", detail: "message"});
+      return;
+    }
     const answers = message ? null : parseAnswers(body.answers);
     if (body.answers !== undefined && !message && !answers) {
       res.status(400).json({error: "invalid_request", detail: "answers"});
       return;
     }
 
-    const projectSnap = await getFirestore()
-      .collection("users")
-      .doc(uid)
-      .collection("projects")
-      .doc(projectId)
-      .get();
+    const projectSnap = await userProjectRef(uid, projectId).get();
     if (!projectSnap.exists || projectSnap.get("deleted") === true) {
       res.status(404).json({error: "project_not_found"});
       return;
@@ -323,21 +313,23 @@ export const chat = onRequest(
 async function runGeneration(ctx: GenerationContext): Promise<void> {
   const {uid, projectId, model, requestId, sse} = ctx;
 
-  const all = await readHistory(uid, projectId);
-  const effective = effectiveHistory(all);
+  const effective = await readEffectiveHistory(uid, projectId);
   let summaryText = effective.summary?.content ?? null;
   let turns = effective.turns;
 
   // Retry requests (no new input) re-answer the pending user turn: drop
   // trailing failed assistant turns so the model gets a clean run at it.
   if (!ctx.hadNewInput) {
-    while (
-      turns.length &&
-      turns[turns.length - 1].role === "assistant" &&
-      (turns[turns.length - 1].status === "error" ||
-        turns[turns.length - 1].status === "interrupted")
-    ) {
-      turns = turns.slice(0, -1);
+    while (turns.length) {
+      const last = turns[turns.length - 1];
+      if (
+        last?.role === "assistant" &&
+        (last.status === "error" || last.status === "interrupted")
+      ) {
+        turns = turns.slice(0, -1);
+      } else {
+        break;
+      }
     }
   }
   const lastTurn = turns[turns.length - 1];
@@ -349,9 +341,12 @@ async function runGeneration(ctx: GenerationContext): Promise<void> {
     return;
   }
 
-  // Compaction: triggered by the previous run's total context usage.
+  // Compaction: triggered by the previous run's total context usage. The
+  // most recent assistant turn is always within the effective window (a
+  // compaction keeps the latest turns un-summarized), so scanning `turns`
+  // finds it without re-reading the full transcript.
   let lastAssistant: HistoryMessage | null = null;
-  for (const m of all) {
+  for (const m of effective.turns) {
     if (m.kind === "chat" && m.role === "assistant") lastAssistant = m;
   }
   const windowTokens = model.contextWindowTokens;
@@ -383,7 +378,7 @@ async function runGeneration(ctx: GenerationContext): Promise<void> {
         const cost = costForTokens(FLASH_MODEL, tokens);
         await writeSummaryMessage(uid, projectId, {
           content: text,
-          compactedThroughSeq: toSummarize[toSummarize.length - 1].seq,
+          compactedThroughSeq: toSummarize[toSummarize.length - 1]?.seq ?? 0,
           tokensConsumed: tokens,
           costCents: cost,
           requestId,
@@ -409,17 +404,23 @@ async function runGeneration(ctx: GenerationContext): Promise<void> {
 
   // Prompt assembly: system + docs, current files, summary, chat turns.
   const tree = await readTree(uid, projectId, ctx.headVersion);
-  const files: ProjectFile[] = [];
   let hasGhlClient = false;
+  const filePaths: {path: string; hash: string}[] = [];
   for (const path of Object.keys(tree).sort()) {
     const hash = tree[path];
-    if (hash === null) continue;
+    if (hash == null) continue;
     if (path === GHL_CLIENT_PATH) {
       hasGhlClient = true;
       continue;
     }
-    files.push({path, content: await fetchBlob(uid, projectId, hash)});
+    filePaths.push({path, hash});
   }
+  const files: ProjectFile[] = await Promise.all(
+    filePaths.map(async ({path, hash}) => ({
+      path,
+      content: await fetchBlob(uid, projectId, hash),
+    })),
+  );
   const llmMessages = buildChatMessages(
     files,
     hasGhlClient,

@@ -27,8 +27,10 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { useBuilderStore, type TreeRow } from '@/stores/builder'
+import { useToastStore } from '@/stores/toast'
 
 const builder = useBuilderStore()
+const toast = useToastStore()
 
 const formOpen = ref(false)
 const formMode = ref<'create' | 'rename'>('create')
@@ -84,10 +86,14 @@ function openDelete(row: TreeRow) {
 
 async function confirmDelete() {
   if (!deleteTarget.value || deleting.value) return
+  const name = deleteTarget.value.name
   deleting.value = true
   try {
     await builder.deleteFile(deleteTarget.value.path)
     deleteOpen.value = false
+    toast.success(`Deleted “${name}”.`)
+  } catch {
+    toast.error(`Could not delete “${name}”. Please try again.`)
   } finally {
     deleting.value = false
   }
