@@ -118,20 +118,21 @@ export async function applyResponseToTree(
 ): Promise<Manifest> {
   const tree: Manifest = {...head};
   for (const path of deletes) delete tree[path];
-  for (const [path, content] of writes) {
-    const hash = sha256Hex(content);
-    await uploadBlobIfAbsent(uid, projectId, hash, content);
-    tree[path] = hash;
-  }
-  if (tree[GHL_CLIENT_PATH] !== GHL_CLIENT_SHA256) {
-    await uploadBlobIfAbsent(
-      uid,
-      projectId,
-      GHL_CLIENT_SHA256,
-      GHL_CLIENT_SOURCE,
-    );
-    tree[GHL_CLIENT_PATH] = GHL_CLIENT_SHA256;
-  }
+  writes.delete(GHL_CLIENT_PATH);
+
+  const needsGhlClient = tree[GHL_CLIENT_PATH] !== GHL_CLIENT_SHA256;
+  await Promise.all([
+    ...Array.from(writes, ([path, content]) => {
+      const hash = sha256Hex(content);
+      tree[path] = hash;
+      return uploadBlobIfAbsent(uid, projectId, hash, content);
+    }),
+    ...(needsGhlClient ?
+      [uploadBlobIfAbsent(uid, projectId, GHL_CLIENT_SHA256, GHL_CLIENT_SOURCE)] :
+      []),
+  ]);
+  if (needsGhlClient) tree[GHL_CLIENT_PATH] = GHL_CLIENT_SHA256;
+
   return tree;
 }
 
