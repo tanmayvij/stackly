@@ -27,7 +27,7 @@ export const appCheck = initializeAppCheck(app, {
 })
 
 export const auth = getAuth(app)
-export const functions = getFunctions(app)
+export const functions = getFunctions(app, import.meta.env.VITE_FUNCTIONS_REGION)
 export const db = getFirestore(app)
 export const storage = getStorage(app)
 

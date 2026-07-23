@@ -58,9 +58,10 @@ export type ChatStreamEvent =
  */
 export function functionUrl(name: string): string {
   const project = import.meta.env.VITE_FIREBASE_PROJECT_ID
+  const region = import.meta.env.VITE_FUNCTIONS_REGION
   return import.meta.env.VITE_USE_EMULATORS === 'true'
-    ? `http://127.0.0.1:5001/${project}/us-central1/${name}`
-    : `https://us-central1-${project}.cloudfunctions.net/${name}`
+    ? `http://127.0.0.1:5001/${project}/${region}/${name}`
+    : `https://${region}-${project}.cloudfunctions.net/${name}`
 }
 
 function chatEndpoint(): string {
