@@ -186,6 +186,11 @@ export const chat = onRequest(
     secrets: [OPENAI_API_KEY, OPENAI_BASE_URL],
     timeoutSeconds: 540,
     memory: "1GiB",
+    concurrency: 8,
+    maxInstances: 20,
+    // minInstances removes cold-start latency, but bills
+    // for an always-warm 1GiB instance. Cost trade-off, revisit when budget allows.
+    // minInstances: 1,
   },
   async (req, res) => {
     setCors(req, res);
