@@ -20,6 +20,8 @@ interface WalletTransaction {
   // CREDIT: Stripe PaymentIntent id; DEBIT: API request id.
   refId: string;
   timestamp: FirebaseFirestore.Timestamp | FirebaseFirestore.FieldValue;
+  // Running balance in cents immediately after this transaction (audit trail).
+  balanceAfter: number;
 }
 
 export interface AddTransactionInput {
@@ -31,33 +33,17 @@ export interface AddTransactionInput {
 }
 
 /**
- * Returns the per-user transaction ledger collection
- * `wallets/{uid}/transactions`.
+ * Reads the running balance maintained on the parent `wallets/{uid}` doc by
+ * `addTransaction`, in cents. O(1) — a single document read. This is the ONLY
+ * authority on balance — it must never be computed on the client.
  * @param {string} userId The owner's uid.
- * @return {FirebaseFirestore.CollectionReference} The transactions collection.
- */
-function txCollection(userId: string) {
-  return getFirestore()
-    .collection("wallets")
-    .doc(userId)
-    .collection("transactions");
-}
-
-/**
- * Sums `valueInCents` across a user's transactions to produce the current
- * balance in cents. This is the ONLY authority on balance — it must never be
- * computed on the client.
- * @param {string} userId The owner's uid.
- * @return {Promise<number>} The balance in cents.
+ * @return {Promise<number>} The balance in cents (0 if the wallet has no
+ *   transactions yet).
  */
 export async function getBalanceForUser(userId: string): Promise<number> {
-  const snapshot = await txCollection(userId).get();
-  let balanceCents = 0;
-  snapshot.forEach((doc) => {
-    const value = doc.get("valueInCents");
-    if (typeof value === "number") balanceCents += value;
-  });
-  return balanceCents;
+  const snap = await getFirestore().collection("wallets").doc(userId).get();
+  const balanceCents = snap.get("balanceCents");
+  return typeof balanceCents === "number" ? balanceCents : 0;
 }
 
 /**
@@ -73,19 +59,33 @@ export async function addTransaction(
   input: AddTransactionInput,
 ): Promise<boolean> {
   const {userId, type, valueInCents, tokensUsed, refId} = input;
-  const col = txCollection(userId);
-
-  const record: WalletTransaction = {
-    type,
-    valueInCents,
-    tokensUsed,
-    refId,
-    timestamp: FieldValue.serverTimestamp(),
-  };
+  const walletRef = getFirestore().collection("wallets").doc(userId);
+  const col = walletRef.collection("transactions");
 
   return getFirestore().runTransaction(async (t) => {
+    // All reads before any write (Firestore transaction rule).
     const existing = await t.get(col.where("refId", "==", refId).limit(1));
+    const walletSnap = await t.get(walletRef);
     if (!existing.empty) return false;
+
+    // Carry the balance forward. A missing counter means an empty wallet.
+    const current = walletSnap.get("balanceCents");
+    const next = (typeof current === "number" ? current : 0) + valueInCents;
+
+    const record: WalletTransaction = {
+      type,
+      valueInCents,
+      tokensUsed,
+      refId,
+      timestamp: FieldValue.serverTimestamp(),
+      balanceAfter: next,
+    };
+
+    t.set(
+      walletRef,
+      {balanceCents: next, updatedAt: FieldValue.serverTimestamp()},
+      {merge: true},
+    );
     t.set(col.doc(randomUUID()), record);
     return true;
   });
