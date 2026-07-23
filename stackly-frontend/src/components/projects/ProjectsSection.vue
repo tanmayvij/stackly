@@ -18,12 +18,14 @@ import {
 } from '@/components/ui/alert-dialog'
 import { useGhlStore } from '@/stores/ghl'
 import { useProjectsStore, type Project } from '@/stores/projects'
+import { useToastStore } from '@/stores/toast'
 import { useUiStore } from '@/stores/ui'
 import { useWalletStore } from '@/stores/wallet'
 
 const router = useRouter()
 const ghlStore = useGhlStore()
 const projectsStore = useProjectsStore()
+const toast = useToastStore()
 const ui = useUiStore()
 const walletStore = useWalletStore()
 
@@ -66,10 +68,14 @@ function onDelete(project: Project) {
 
 async function confirmDelete() {
   if (!activeProject.value || deleting.value) return
+  const name = activeProject.value.name
   deleting.value = true
   try {
     await projectsStore.softDelete(activeProject.value.id)
     deleteOpen.value = false
+    toast.success(`“${name}” was deleted.`)
+  } catch {
+    toast.error(`Could not delete “${name}”. Please try again.`)
   } finally {
     deleting.value = false
   }
@@ -145,9 +151,9 @@ async function confirmDelete() {
     <AlertDialog v-model:open="deleteOpen">
       <AlertDialogContent class="bg-card border-border-strong shadow-card rounded-xl">
         <AlertDialogHeader>
-          <AlertDialogTitle>BAD THINGS WILL HAPPEN IF YOU DON'T READ THIS</AlertDialogTitle>
+          <AlertDialogTitle>Delete this project?</AlertDialogTitle>
           <AlertDialogDescription>
-            “{{ activeProject?.name }}” will be permanently deleted. Please note that this entails you losing all your code for this project and will be permanently unrecoverable.
+            “{{ activeProject?.name }}” will be removed from your dashboard and you won’t be able to open or build on it anymore.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
