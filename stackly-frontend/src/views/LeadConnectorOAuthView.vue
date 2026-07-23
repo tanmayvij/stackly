@@ -18,7 +18,12 @@ function fail(text: string) {
 }
 
 onMounted(async () => {
-  const { code, error, error_description: errorDescription } = route.query
+  const { code, state, error, error_description: errorDescription } = route.query
+
+  // Scrub the OAuth params from the address bar and history right away, before
+  // anything can await — the single-use code (and state) shouldn't linger in
+  // history or leak via a Referer header. Query is already captured above.
+  window.history.replaceState(window.history.state, '', window.location.pathname)
 
   if (typeof error === 'string') {
     fail(
@@ -30,6 +35,11 @@ onMounted(async () => {
   }
   if (typeof code !== 'string' || !code) {
     fail('No authorization code was returned by HighLevel.')
+    return
+  }
+  // CSRF check
+  if (!ghlStore.verifyState(typeof state === 'string' ? state : null)) {
+    fail('This HighLevel connection request could not be verified. Start the connection again from Stackly.')
     return
   }
 

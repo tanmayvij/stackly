@@ -1,6 +1,6 @@
 import {getFirestore, FieldValue, Timestamp} from "firebase-admin/firestore";
 import {onCall, HttpsError} from "firebase-functions/https";
-import {GHL_CLIENT_ID, GHL_CLIENT_SECRET} from "./config";
+import {GHL_CLIENT_ID, GHL_CLIENT_SECRET, GHL_REDIRECT_URI} from "./config";
 
 const TOKEN_URL = "https://services.leadconnectorhq.com/oauth/token";
 export const API_BASE = "https://services.leadconnectorhq.com";
@@ -225,17 +225,21 @@ function scopeCount(scope: string): number {
 // stores the connection under the caller's uid. Returns only non-secret status
 // for the client.
 export const exchangeGhlCode = onCall(
-  {secrets: [GHL_CLIENT_ID, GHL_CLIENT_SECRET]},
+  {secrets: [GHL_CLIENT_ID, GHL_CLIENT_SECRET, GHL_REDIRECT_URI]},
   async (request) => {
     const uid = requireUid(request.auth);
 
     const code = request.data?.code;
-    const redirectUri = request.data?.redirectUri;
     if (typeof code !== "string" || !code) {
       throw new HttpsError("invalid-argument", "Missing authorization code.");
     }
-    if (typeof redirectUri !== "string" || !redirectUri) {
-      throw new HttpsError("invalid-argument", "Missing redirectUri.");
+    // Must match the redirect the frontend used on the authorize screen or GHL rejects it.
+    const redirectUri = GHL_REDIRECT_URI.value();
+    if (!redirectUri) {
+      throw new HttpsError(
+        "failed-precondition",
+        "HighLevel authorization failed.",
+      );
     }
 
     const token = await requestGhlToken({

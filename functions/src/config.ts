@@ -10,6 +10,7 @@ export const STRIPE_SECRET_KEY = defineSecret("STRIPE_SECRET_KEY");
 // Set each with: `firebase functions:secrets:set <NAME>`.
 export const GHL_CLIENT_ID = defineSecret("GHL_CLIENT_ID");
 export const GHL_CLIENT_SECRET = defineSecret("GHL_CLIENT_SECRET");
+export const GHL_REDIRECT_URI = defineSecret("GHL_REDIRECT_URI");
 
 // OpenAI-compatible LLM endpoint used to name/describe new projects. The base
 // URL isn't sensitive, but it uses the same secret mechanism so both live in
