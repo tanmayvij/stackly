@@ -115,12 +115,15 @@ export function assistantMessageData(
  * @param {string} uid The owner's uid.
  * @param {string} projectId The project id.
  * @param {Record<string, unknown>} data The payload (without seq/createdAt).
+ * @param {Record<string, unknown>} [projectPatch] Extra fields to merge into
+ *   the project doc in the same transaction (e.g. the compaction cursor).
  * @return {Promise<{id: string, seq: number}>} The new doc id and seq.
  */
 async function writeMessage(
   uid: string,
   projectId: string,
   data: Record<string, unknown>,
+  projectPatch?: Record<string, unknown>,
 ): Promise<{id: string; seq: number}> {
   const db = getFirestore();
   const project = projectRef(uid, projectId);
@@ -130,7 +133,7 @@ async function writeMessage(
     const seq =
       ((snap.get("lastMessageSeq") as number | undefined) ?? 0) + 1;
     const ref = messagesCollection(uid, projectId).doc();
-    t.update(project, {lastMessageSeq: seq});
+    t.update(project, {lastMessageSeq: seq, ...projectPatch});
     t.create(ref, {...data, seq, createdAt: FieldValue.serverTimestamp()});
     return {id: ref.id, seq};
   });
@@ -199,31 +202,33 @@ export function writeSummaryMessage(
     requestId: string;
   },
 ): Promise<{id: string; seq: number}> {
-  return writeMessage(uid, projectId, {
-    kind: "summary",
-    role: "system",
-    content: input.content,
-    compactedThroughSeq: input.compactedThroughSeq,
-    tokensConsumed: input.tokensConsumed,
-    costCents: input.costCents,
-    requestId: input.requestId,
-  });
+  return writeMessage(
+    uid,
+    projectId,
+    {
+      kind: "summary",
+      role: "system",
+      content: input.content,
+      compactedThroughSeq: input.compactedThroughSeq,
+      tokensConsumed: input.tokensConsumed,
+      costCents: input.costCents,
+      requestId: input.requestId,
+    },
+    // Cursor read by readEffectiveHistory to bound the per-turn read to
+    // messages after the latest compaction instead of the whole transcript.
+    {compactedThroughSeq: input.compactedThroughSeq},
+  );
 }
 
 /**
- * Reads the full transcript ordered by seq.
- * @param {string} uid The owner's uid.
- * @param {string} projectId The project id.
- * @return {Promise<HistoryMessage[]>} All messages, oldest first.
+ * Maps a message doc to the prompt-ready {@link HistoryMessage} shape.
+ * @param {FirebaseFirestore.QueryDocumentSnapshot} d The message doc.
+ * @return {HistoryMessage} The parsed message.
  */
-export async function readHistory(
-  uid: string,
-  projectId: string,
-): Promise<HistoryMessage[]> {
-  const snap = await messagesCollection(uid, projectId)
-    .orderBy("seq", "asc")
-    .get();
-  return snap.docs.map((d) => ({
+function mapMessageDoc(
+  d: FirebaseFirestore.QueryDocumentSnapshot,
+): HistoryMessage {
+  return {
     id: d.id,
     kind: (d.get("kind") as HistoryMessage["kind"]) ?? "chat",
     role: (d.get("role") as HistoryMessage["role"]) ?? "user",
@@ -234,7 +239,38 @@ export async function readHistory(
     status: (d.get("status") as MessageStatus) ?? null,
     contextTokens: (d.get("contextTokens") as number) ?? 0,
     compactedThroughSeq: (d.get("compactedThroughSeq") as number) ?? 0,
-  }));
+  };
+}
+
+/**
+ * Reads the prompt-ready conversation without scanning the whole transcript.
+ *
+ * The per-turn read is bounded to messages after the latest compaction: we
+ * read the `compactedThroughSeq` cursor off the project doc (maintained by
+ * {@link writeSummaryMessage}) and fetch only `seq > cutoff`. This keeps the
+ * read cost O(turns since last compaction) instead of O(total turns), so a
+ * long-lived project doesn't pay to re-read its entire — already summarized —
+ * history on every message.
+ *
+ * A never-compacted project has cutoff 0 and reads all its turns, which is
+ * exactly the (small) set the prompt needs. {@link effectiveHistory} then
+ * resolves the summary + turns from the bounded window.
+ * @param {string} uid The owner's uid.
+ * @param {string} projectId The project id.
+ * @return {Promise<EffectiveHistory>} The summary + turns for the prompt.
+ */
+export async function readEffectiveHistory(
+  uid: string,
+  projectId: string,
+): Promise<EffectiveHistory> {
+  const projectSnap = await projectRef(uid, projectId).get();
+  const cutoff =
+    (projectSnap.get("compactedThroughSeq") as number | undefined) ?? 0;
+  const snap = await messagesCollection(uid, projectId)
+    .where("seq", ">", cutoff)
+    .orderBy("seq", "asc")
+    .get();
+  return effectiveHistory(snap.docs.map(mapMessageDoc));
 }
 
 export interface EffectiveHistory {

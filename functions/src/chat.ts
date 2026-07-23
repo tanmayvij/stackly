@@ -39,8 +39,7 @@ import {
   HistoryMessage,
   MessageErrorCode,
   acquireChatLock,
-  effectiveHistory,
-  readHistory,
+  readEffectiveHistory,
   releaseChatLock,
   renewChatLock,
   writeAssistantMessage,
@@ -363,8 +362,7 @@ export const chat = onRequest(
 async function runGeneration(ctx: GenerationContext): Promise<void> {
   const {uid, projectId, model, requestId, sse} = ctx;
 
-  const all = await readHistory(uid, projectId);
-  const effective = effectiveHistory(all);
+  const effective = await readEffectiveHistory(uid, projectId);
   let summaryText = effective.summary?.content ?? null;
   let turns = effective.turns;
 
@@ -389,9 +387,12 @@ async function runGeneration(ctx: GenerationContext): Promise<void> {
     return;
   }
 
-  // Compaction: triggered by the previous run's total context usage.
+  // Compaction: triggered by the previous run's total context usage. The
+  // most recent assistant turn is always within the effective window (a
+  // compaction keeps the latest turns un-summarized), so scanning `turns`
+  // finds it without re-reading the full transcript.
   let lastAssistant: HistoryMessage | null = null;
-  for (const m of all) {
+  for (const m of effective.turns) {
     if (m.kind === "chat" && m.role === "assistant") lastAssistant = m;
   }
   const windowTokens = model.contextWindowTokens;
