@@ -269,20 +269,26 @@ export const exchangeGhlCode = onCall(
 
 // Returns the caller's current connection status (never any tokens), or null
 // if HighLevel is not connected. Used to seed the store on login.
-export const getGhlConnection = onCall(async (request) => {
-  const uid = requireUid(request.auth);
-  const snap = await connectionDoc(uid).get();
-  if (!snap.exists) return null;
-  const scope = (snap.get("scope") as string) || "";
-  return {
-    locationName: (snap.get("locationName") as string) || "",
-    scopesGranted: scopeCount(scope),
-  };
-});
+export const getGhlConnection = onCall(
+  {enforceAppCheck: true},
+  async (request) => {
+    const uid = requireUid(request.auth);
+    const snap = await connectionDoc(uid).get();
+    if (!snap.exists) return null;
+    const scope = (snap.get("scope") as string) || "";
+    return {
+      locationName: (snap.get("locationName") as string) || "",
+      scopesGranted: scopeCount(scope),
+    };
+  },
+);
 
 // Removes the caller's stored connection.
-export const disconnectGhl = onCall(async (request) => {
-  const uid = requireUid(request.auth);
-  await connectionDoc(uid).delete();
-  return {ok: true as const};
-});
+export const disconnectGhl = onCall(
+  {enforceAppCheck: true},
+  async (request) => {
+    const uid = requireUid(request.auth);
+    await connectionDoc(uid).delete();
+    return {ok: true as const};
+  },
+);

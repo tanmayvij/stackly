@@ -7,6 +7,7 @@
 // free of charge.
 
 import {randomUUID} from "node:crypto";
+import {getAppCheck} from "firebase-admin/app-check";
 import {getAuth} from "firebase-admin/auth";
 import {getFirestore} from "firebase-admin/firestore";
 import {onRequest, Request} from "firebase-functions/https";
@@ -79,8 +80,28 @@ function setCors(req: Request, res: Response): void {
   res.set("Access-Control-Allow-Origin", req.headers.origin ?? "*");
   res.set("Vary", "Origin");
   res.set("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.set("Access-Control-Allow-Headers", "Authorization, Content-Type");
+  res.set(
+    "Access-Control-Allow-Headers",
+    "Authorization, Content-Type, X-Firebase-AppCheck",
+  );
   res.set("Access-Control-Max-Age", "3600");
+}
+
+/**
+ * Verifies the App Check token from the X-Firebase-AppCheck header. onCall
+ * enforces this automatically; this onRequest endpoint has to do it by hand.
+ * @param {Request} req The incoming request.
+ * @return {Promise<boolean>} Whether the request carries a valid token.
+ */
+async function verifyAppCheck(req: Request): Promise<boolean> {
+  const token = req.header("X-Firebase-AppCheck");
+  if (!token) return false;
+  try {
+    await getAppCheck().verifyToken(token);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -174,6 +195,11 @@ export const chat = onRequest(
     }
     if (req.method !== "POST") {
       res.status(405).json({error: "method_not_allowed"});
+      return;
+    }
+
+    if (!(await verifyAppCheck(req))) {
+      res.status(401).json({error: "app_check_failed"});
       return;
     }
 

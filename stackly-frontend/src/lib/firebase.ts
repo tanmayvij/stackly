@@ -1,4 +1,5 @@
 import { initializeApp } from 'firebase/app'
+import { initializeAppCheck, ReCaptchaV3Provider } from 'firebase/app-check'
 import { getAuth, connectAuthEmulator } from 'firebase/auth'
 import { getFunctions, connectFunctionsEmulator } from 'firebase/functions'
 import { getFirestore, connectFirestoreEmulator } from 'firebase/firestore'
@@ -13,6 +14,18 @@ const firebaseConfig = {
 }
 
 export const app = initializeApp(firebaseConfig)
+
+if (import.meta.env.VITE_USE_EMULATORS === 'true') {
+  // Lets the emulator/local dev app pass App Check enforcement without a
+  // real reCAPTCHA token. Register this debug token as "(unregistered)" in
+  // the App Check console the first time it's logged, or set a fixed one.
+  self.FIREBASE_APPCHECK_DEBUG_TOKEN = true
+}
+export const appCheck = initializeAppCheck(app, {
+  provider: new ReCaptchaV3Provider(import.meta.env.VITE_RECAPTCHA_SITE_KEY),
+  isTokenAutoRefreshEnabled: true,
+})
+
 export const auth = getAuth(app)
 export const functions = getFunctions(app)
 export const db = getFirestore(app)

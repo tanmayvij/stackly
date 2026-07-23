@@ -1,5 +1,6 @@
+import { getToken } from 'firebase/app-check'
 import { signOut } from 'firebase/auth'
-import { auth } from '@/lib/firebase'
+import { appCheck, auth } from '@/lib/firebase'
 
 /**
  * Thrown on HTTP 409 — another run holds this project's generation lock.
@@ -79,11 +80,13 @@ export async function streamChat(
   const user = auth.currentUser
   if (!user) throw new Error('Sign in to use the assistant.')
   const token = await user.getIdToken()
+  const appCheckToken = await getToken(appCheck)
 
   const res = await fetch(chatEndpoint(), {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
+      'X-Firebase-AppCheck': appCheckToken.token,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),

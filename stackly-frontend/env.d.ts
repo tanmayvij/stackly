@@ -11,3 +11,9 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv
 }
+
+interface Window {
+  // Firebase App Check debug-mode flag, read by the App Check SDK — not
+  // declared in lib.dom.d.ts since it's a Firebase-only global.
+  FIREBASE_APPCHECK_DEBUG_TOKEN?: boolean | string
+}

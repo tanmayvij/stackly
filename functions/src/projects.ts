@@ -24,7 +24,7 @@ function requireUid(auth: { uid: string } | undefined): string {
 // stores a new project under `users/{uid}/projects/{guid}`. The document's
 // auto-generated id doubles as the storage folder reference for its files.
 export const createProject = onCall(
-  { secrets: [OPENAI_API_KEY, OPENAI_BASE_URL] },
+  { secrets: [OPENAI_API_KEY, OPENAI_BASE_URL], enforceAppCheck: true },
   async (request) => {
     const uid = requireUid(request.auth);
 

@@ -101,7 +101,7 @@ export function verifyPreviewToken(
 // The frontend injects the result into the preview iframe; the token only
 // grants access to the ghlProxy path allowlist, never to Firebase.
 export const mintPreviewToken = onCall(
-  {secrets: [PREVIEW_TOKEN_SECRET]},
+  {secrets: [PREVIEW_TOKEN_SECRET], enforceAppCheck: true},
   async (request) => {
     if (!request.auth) {
       throw new HttpsError("unauthenticated", "Sign in to preview apps.");

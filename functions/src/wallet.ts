@@ -128,17 +128,20 @@ export function costForTokens(model: string, tokens: number): number {
 
 // Returns the caller's current wallet balance in cents, computed server-side.
 // Used at app runtime to seed the store and after a recharge to refresh it.
-export const getCurrentBalance = onCall(async (request) => {
-  const uid = requireUid(request.auth);
-  const balanceCents = await getBalanceForUser(uid);
-  return {balanceCents};
-});
+export const getCurrentBalance = onCall(
+  {enforceAppCheck: true},
+  async (request) => {
+    const uid = requireUid(request.auth);
+    const balanceCents = await getBalanceForUser(uid);
+    return {balanceCents};
+  },
+);
 
 // Creates a one-time Stripe PaymentIntent for a wallet top-up and returns its
 // client secret. The amount is validated and clamped server-side, and the
 // caller's uid is stamped into metadata so `confirmTopUp` can verify ownership.
 export const createTopUpIntent = onCall(
-  {secrets: [STRIPE_SECRET_KEY]},
+  {secrets: [STRIPE_SECRET_KEY], enforceAppCheck: true},
   async (request) => {
     const uid = requireUid(request.auth);
 
@@ -173,7 +176,7 @@ export const createTopUpIntent = onCall(
 // on the PaymentIntent id (stored as refId), so repeated polls cannot
 // double-credit.
 export const confirmTopUp = onCall(
-  {secrets: [STRIPE_SECRET_KEY]},
+  {secrets: [STRIPE_SECRET_KEY], enforceAppCheck: true},
   async (request) => {
     const uid = requireUid(request.auth);
 
