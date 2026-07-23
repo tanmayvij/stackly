@@ -449,8 +449,8 @@ async function runGeneration(ctx: GenerationContext): Promise<void> {
 
   // Prompt assembly: system + docs, current files, summary, chat turns.
   const tree = await readTree(uid, projectId, ctx.headVersion);
-  const files: ProjectFile[] = [];
   let hasGhlClient = false;
+  const filePaths: {path: string; hash: string}[] = [];
   for (const path of Object.keys(tree).sort()) {
     const hash = tree[path];
     if (hash === null) continue;
@@ -458,8 +458,14 @@ async function runGeneration(ctx: GenerationContext): Promise<void> {
       hasGhlClient = true;
       continue;
     }
-    files.push({path, content: await fetchBlob(uid, projectId, hash)});
+    filePaths.push({path, hash});
   }
+  const files: ProjectFile[] = await Promise.all(
+    filePaths.map(async ({path, hash}) => ({
+      path,
+      content: await fetchBlob(uid, projectId, hash),
+    })),
+  );
   const llmMessages = buildChatMessages(
     files,
     hasGhlClient,
