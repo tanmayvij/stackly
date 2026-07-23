@@ -159,8 +159,9 @@ function renderAnswers(answers: Answer[]): string {
  */
 function versionTitle(turns: HistoryMessage[]): string {
   for (let i = turns.length - 1; i >= 0; i--) {
-    if (turns[i].role === "user") {
-      const line = turns[i].content.replace(/\s+/g, " ").trim();
+    const turn = turns[i];
+    if (turn?.role === "user") {
+      const line = turn.content.replace(/\s+/g, " ").trim();
       if (line) return line.length > 60 ? `${line.slice(0, 57)}...` : line;
     }
   }
@@ -369,13 +370,16 @@ async function runGeneration(ctx: GenerationContext): Promise<void> {
   // Retry requests (no new input) re-answer the pending user turn: drop
   // trailing failed assistant turns so the model gets a clean run at it.
   if (!ctx.hadNewInput) {
-    while (
-      turns.length &&
-      turns[turns.length - 1].role === "assistant" &&
-      (turns[turns.length - 1].status === "error" ||
-        turns[turns.length - 1].status === "interrupted")
-    ) {
-      turns = turns.slice(0, -1);
+    while (turns.length) {
+      const last = turns[turns.length - 1];
+      if (
+        last?.role === "assistant" &&
+        (last.status === "error" || last.status === "interrupted")
+      ) {
+        turns = turns.slice(0, -1);
+      } else {
+        break;
+      }
     }
   }
   const lastTurn = turns[turns.length - 1];
@@ -424,7 +428,7 @@ async function runGeneration(ctx: GenerationContext): Promise<void> {
         const cost = costForTokens(FLASH_MODEL, tokens);
         await writeSummaryMessage(uid, projectId, {
           content: text,
-          compactedThroughSeq: toSummarize[toSummarize.length - 1].seq,
+          compactedThroughSeq: toSummarize[toSummarize.length - 1]?.seq ?? 0,
           tokensConsumed: tokens,
           costCents: cost,
           requestId,
@@ -454,7 +458,7 @@ async function runGeneration(ctx: GenerationContext): Promise<void> {
   const filePaths: {path: string; hash: string}[] = [];
   for (const path of Object.keys(tree).sort()) {
     const hash = tree[path];
-    if (hash === null) continue;
+    if (hash == null) continue;
     if (path === GHL_CLIENT_PATH) {
       hasGhlClient = true;
       continue;

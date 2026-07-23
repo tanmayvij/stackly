@@ -242,9 +242,9 @@ const TESTS: Array<[string, () => void]> = [
         "<suggest label=\"C\">c</suggest>";
       const {result} = run(input, 10);
       assert.equal(result.suggestions.length, 2);
-      assert.equal(result.suggestions[0].label,
+      assert.equal(result.suggestions[0]?.label,
         "Show unread conversations first");
-      assert.equal(result.suggestions[1].label, "B");
+      assert.equal(result.suggestions[1]?.label, "B");
     },
   ],
   [

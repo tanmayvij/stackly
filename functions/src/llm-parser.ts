@@ -341,7 +341,7 @@ export class LlmStreamParser {
       if (!this.fileSkip) {
         events.push({type: "file-end", path: this.filePath});
       }
-      this.buf = this.buf.slice(m.index + m[0].length);
+      this.buf = this.buf.slice(m.index + (m[0] ?? "").length);
       this.state = "text";
       return true;
     }
@@ -426,7 +426,7 @@ export class LlmStreamParser {
       if (!trimmed) continue;
       const m = CHOICE_LINE.exec(trimmed);
       if (m) {
-        choices.push(m[1].trim());
+        choices.push((m[1] ?? "").trim());
       } else {
         textLines.push(trimmed);
       }
