@@ -80,21 +80,29 @@ stackly/
 ├─ functions/              # Cloud Functions backend (TypeScript → lib/)
 │  ├─ .secret.example       # secret names required by the backend
 │  └─ src/
-│     ├─ index.ts           # exports every function
-│     ├─ app.ts             # initializeApp + setGlobalOptions
-│     ├─ config.ts          # secret definitions, model pricing, thresholds
-│     ├─ wallet.ts          # Stripe top-ups + the billing ledger
-│     ├─ ghl.ts             # HighLevel OAuth token exchange
-│     ├─ ghl-proxy.ts       # runtime GHL API proxy for generated apps
-│     ├─ preview-token.ts   # short-lived HMAC tokens for the preview iframe
-│     ├─ projects.ts        # createProject (AI names/describes the app)
-│     ├─ chat.ts            # SSE-streaming builder chat (one turn = one version)
-│     ├─ openai.ts          # OpenAI-compatible LLM client
-│     ├─ repo.ts            # server-side "mini-git" (blobs + versions)
-│     ├─ messages.ts        # chat transcript + per-project generation lock
-│     ├─ llm-parser.ts      # incremental parser for the model's streamed output
-│     ├─ prompt.ts, ghl-docs.ts  # prompt assembly + injected GHL API docs
-│     └─ test/              # node test files (llm-parser, wallet, messages)
+│     ├─ index.ts               # single deploy registry: re-exports every function
+│     ├─ core/
+│     │  └─ bootstrap.ts        # initializeApp + setGlobalOptions (side-effect import)
+│     ├─ shared/                # cross-cutting utilities used by all modules
+│     │  ├─ auth.ts              # ID-token verification for HTTP endpoints
+│     │  ├─ http.ts              # shared HTTP/SSE helpers
+│     │  ├─ config/              # secrets, model pricing, input limits (barrel export)
+│     │  ├─ firestore/refs.ts    # typed Firestore document/collection refs
+│     │  └─ llm/client.ts        # OpenAI-compatible LLM client factory
+│     └─ modules/                # one folder per feature; controllers wire to index.ts
+│        ├─ ops/health.controller.ts
+│        ├─ wallet/              # controller + service + Stripe client + types + tests
+│        │                       # (getCurrentBalance, createTopUpIntent, confirmTopUp)
+│        ├─ ghl/                 # OAuth token exchange + connection mgmt + runtime proxy
+│        │                       # (exchangeGhlCode, getGhlConnection, disconnectGhl,
+│        │                       #  ghlProxy) + generated GHL client + injected docs
+│        ├─ projects/            # createProject (AI names/describes the app)
+│        ├─ preview/             # mintPreviewToken (short-lived HMAC for iframe)
+│        └─ builder/             # AI code-generation chat
+│           ├─ chat/             # chat.controller (SSE), prompt assembly, sse helpers
+│           ├─ messages/         # chat transcript + per-project generation lock + tests
+│           ├─ parser/           # incremental parser for the model's streamed output
+│           └─ versions/         # server-side "mini-git" (blobs + immutable versions)
 │
 └─ stackly-frontend/       # Vue SPA
    ├─ .env.example
@@ -232,7 +240,7 @@ The active project is pinned in `.firebaserc` (`ghl-builder-161d7`). With the CL
 
 ### 3. DeepInfra (LLM provider)
 
-The models are served by **DeepInfra**. After signing up and recharging the wallet for initial use, an API key was generated and stored as the `OPENAI_API_KEY` secret; DeepInfra is reached through its **OpenAI-compatible API**, with the endpoint set in the `OPENAI_BASE_URL` secret. The backend uses the standard `openai` SDK pointed at that base URL. Configured models and per-million-token pricing (in cents) live in `functions/src/config.ts`:
+The models are served by **DeepInfra**. After signing up and recharging the wallet for initial use, an API key was generated and stored as the `OPENAI_API_KEY` secret; DeepInfra is reached through its **OpenAI-compatible API**, with the endpoint set in the `OPENAI_BASE_URL` secret. The backend uses the standard `openai` SDK pointed at that base URL. Configured models and per-million-token pricing (in cents) live in `functions/src/shared/config/models.ts`:
 
 | Model | ¢ / 1M tokens | Context window |
 |---|---|---|
