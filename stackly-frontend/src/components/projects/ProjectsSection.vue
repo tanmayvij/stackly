@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Plus } from '@lucide/vue'
+import { ChevronLeft, ChevronRight, Plus } from '@lucide/vue'
 import EditProjectModal from '@/components/projects/EditProjectModal.vue'
 import NewProjectModal from '@/components/projects/NewProjectModal.vue'
 import ProjectCard from '@/components/projects/ProjectCard.vue'
@@ -101,7 +101,30 @@ async function confirmDelete() {
     </div>
 
     <div
-      v-else
+      v-if="projectsStore.currentPage > 0 || projectsStore.hasNextPage"
+      class="mt-6 flex items-center justify-center gap-4"
+    >
+      <Button
+        variant="outline"
+        :disabled="projectsStore.currentPage === 0 || projectsStore.isLoading"
+        @click="projectsStore.prevPage()"
+      >
+        <ChevronLeft />
+        Prev
+      </Button>
+      <span class="text-muted-foreground text-sm">Page {{ projectsStore.currentPage + 1 }}</span>
+      <Button
+        variant="outline"
+        :disabled="!projectsStore.hasNextPage || projectsStore.isLoading"
+        @click="projectsStore.nextPage()"
+      >
+        Next
+        <ChevronRight />
+      </Button>
+    </div>
+
+    <div
+      v-if="!projectsStore.projects.length"
       class="border-border-strong flex flex-col items-center gap-3 rounded-xl border border-dashed py-14 text-center"
     >
       <div class="bg-muted flex size-11 items-center justify-center rounded-lg border">
