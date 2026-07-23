@@ -76,6 +76,6 @@ jobs:
       - name: Deploy to Firebase
         run: |
           echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_GHL_BUILDER_161D7 }}' > /tmp/sa.json
-          npx firebase-tools deploy --project ghl-builder-161d7
+          npx firebase-tools deploy --project ghl-builder-161d7 --force
         env:
           GOOGLE_APPLICATION_CREDENTIALS: /tmp/sa.json
