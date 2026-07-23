@@ -85,7 +85,7 @@ async function onCreate() {
           :rows="4"
           :maxlength="MAX_PROMPT_CHARS"
           :disabled="processing"
-          class="bg-muted min-h-24 resize-none"
+          class="bg-muted min-h-24 max-h-56 resize-none overflow-y-auto [field-sizing:fixed]"
         />
         <p
           v-if="prompt.length > MAX_PROMPT_CHARS * 0.9"
