@@ -3,6 +3,7 @@
 // Exits non-zero on the first failure.
 
 import assert from "node:assert";
+import {Test, main} from "../../../test/harness";
 import {
   AccumulatedResponse,
   LlmStreamParser,
@@ -77,7 +78,7 @@ const FULL_RESPONSE = [
   "<suggest>Paginate the contacts list, 10 per page</suggest>",
 ].join("\n");
 
-const TESTS: Array<[string, () => void]> = [
+const TESTS: Test[] = [
   [
     "full response parses in one shot",
     () => {
@@ -323,19 +324,4 @@ const TESTS: Array<[string, () => void]> = [
   ],
 ];
 
-let failed = 0;
-for (const [name, fn] of TESTS) {
-  try {
-    fn();
-    console.log(`ok - ${name}`);
-  } catch (err) {
-    failed += 1;
-    console.error(`FAIL - ${name}`);
-    console.error(err);
-  }
-}
-if (failed > 0) {
-  console.error(`${failed}/${TESTS.length} tests failed`);
-  process.exit(1);
-}
-console.log(`all ${TESTS.length} tests passed`);
+void main("parser (pure)", TESTS);

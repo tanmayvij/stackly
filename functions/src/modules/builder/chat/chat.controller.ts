@@ -78,7 +78,7 @@ const COMPACT_KEEP_TURNS = 4;
  * @return {Answer[] | null} The validated answers, or null when absent
  *   or invalid.
  */
-function parseAnswers(raw: unknown): Answer[] | null {
+export function parseAnswers(raw: unknown): Answer[] | null {
   if (!Array.isArray(raw) || raw.length === 0 || raw.length > 4) return null;
   const answers: Answer[] = [];
   for (const item of raw) {
@@ -99,7 +99,7 @@ function parseAnswers(raw: unknown): Answer[] | null {
  * @param {Answer[]} answers The validated answers.
  * @return {string} The rendered message content.
  */
-function renderAnswers(answers: Answer[]): string {
+export function renderAnswers(answers: Answer[]): string {
   return answers
     .map((a) => `Q: ${a.question}\nA: ${a.choice}`)
     .join("\n\n");
@@ -110,7 +110,7 @@ function renderAnswers(answers: Answer[]): string {
  * @param {HistoryMessage[]} turns The effective conversation turns.
  * @return {string} A short single-line title.
  */
-function versionTitle(turns: HistoryMessage[]): string {
+export function versionTitle(turns: HistoryMessage[]): string {
   for (let i = turns.length - 1; i >= 0; i--) {
     const turn = turns[i];
     if (turn?.role === "user") {

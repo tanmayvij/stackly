@@ -3,7 +3,9 @@
   "scripts": {
     "lint": "eslint --ext .js,.ts .",
     "build": "tsc",
-    "test": "npm run build && node lib/modules/builder/parser/parser.test.js && node lib/modules/wallet/wallet.test.js && node lib/modules/builder/messages/messages.test.js",
+    "test": "npm run build && node lib/modules/builder/parser/parser.test.js && node lib/modules/wallet/wallet.test.js && node lib/modules/builder/messages/messages.test.js && node lib/modules/preview/preview.service.test.js && node lib/modules/ghl/ghl.service.test.js && node lib/modules/ghl/proxy.controller.test.js && node lib/modules/builder/versions/versions.service.test.js && node lib/modules/builder/chat/chat.controller.test.js",
+    "test:emulator": "npm run build && firebase emulators:exec --only firestore,storage,auth \"node lib/test/run-emulator.js && node lib/test/firestore.rules.test.js\"",
+    "test:all": "npm test && npm run test:emulator",
     "build:watch": "tsc --watch",
     "serve": "npm run build && firebase emulators:start --only functions,firestore,auth,storage",
     "shell": "npm run build && firebase functions:shell",
@@ -23,13 +25,16 @@
     "stripe": "^19.3.0"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.1",
     "@typescript-eslint/eslint-plugin": "^5.12.0",
     "@typescript-eslint/parser": "^5.12.0",
     "eslint": "^8.9.0",
     "eslint-config-google": "^0.14.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-import": "^2.25.4",
+    "firebase": "^12.16.0",
     "firebase-functions-test": "^3.4.1",
+    "firebase-tools": "^15.24.0",
     "typescript": "^6.0.0"
   },
   "private": true

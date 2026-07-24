@@ -20,6 +20,17 @@ import {verifyPreviewToken} from "../preview/preview.service";
 
 const ALLOWED_PATH = /^\/(contacts|conversations|calendars)(\/|$)/;
 const ALLOWED_METHODS = new Set(["GET", "POST", "PUT", "DELETE"]);
+
+/**
+ * Whether the proxy may forward a request to this path. The reachable surface
+ * is restricted to the contacts, conversations, and calendars API families,
+ * and any path-traversal segment is rejected outright.
+ * @param {string} path The request path (e.g. "/contacts/123").
+ * @return {boolean} True if the path is allowed.
+ */
+export function isAllowedGhlPath(path: string): boolean {
+  return ALLOWED_PATH.test(path) && !path.includes("..");
+}
 // Refresh the stored access token when it expires within this margin, so
 // only our backend ever exercises the refresh grant.
 const REFRESH_MARGIN_MS = 5 * 60_000;
@@ -59,7 +70,7 @@ export const ghlProxy = onRequest(
     const uid = verdict.uid;
 
     const path = req.path;
-    if (!ALLOWED_PATH.test(path) || path.includes("..")) {
+    if (!isAllowedGhlPath(path)) {
       res.status(403).json({error: "path_not_allowed"});
       return;
     }

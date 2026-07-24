@@ -5,6 +5,7 @@
 // and belong in an emulator-backed test, not here.
 
 import assert from "node:assert";
+import {Test, main} from "../../test/harness";
 import {costForTokens} from "./wallet.service";
 import {MODEL_PRICING} from "../../shared/config";
 
@@ -12,7 +13,7 @@ const GLM = "zai-org/GLM-5.2"; // 400 cents / 1M tokens
 const FLASH = "deepseek-ai/DeepSeek-V4-Flash"; // 50 cents / 1M tokens
 const GPT_OSS = "openai/gpt-oss-120b"; // 35 cents / 1M tokens
 
-const TESTS: Array<[string, () => void]> = [
+const TESTS: Test[] = [
   [
     "one million tokens costs exactly the per-million price",
     () => {
@@ -73,19 +74,4 @@ const TESTS: Array<[string, () => void]> = [
   ],
 ];
 
-let failed = 0;
-for (const [name, fn] of TESTS) {
-  try {
-    fn();
-    console.log(`ok - ${name}`);
-  } catch (err) {
-    failed += 1;
-    console.error(`FAIL - ${name}`);
-    console.error(err);
-  }
-}
-if (failed > 0) {
-  console.error(`${failed}/${TESTS.length} tests failed`);
-  process.exit(1);
-}
-console.log(`all ${TESTS.length} tests passed`);
+void main("wallet.service (pure)", TESTS);

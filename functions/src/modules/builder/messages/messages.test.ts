@@ -5,6 +5,7 @@
 // Firestore transactions and belong in an emulator-backed test, not here.
 
 import assert from "node:assert";
+import {Test, main} from "../../../test/harness";
 import {HistoryMessage, effectiveHistory} from "./messages.service";
 
 /**
@@ -28,7 +29,7 @@ function msg(partial: Partial<HistoryMessage>): HistoryMessage {
   };
 }
 
-const TESTS: Array<[string, () => void]> = [
+const TESTS: Test[] = [
   [
     "no summary returns every chat turn and a null summary",
     () => {
@@ -114,21 +115,70 @@ const TESTS: Array<[string, () => void]> = [
       assert.deepEqual(turns, []);
     },
   ],
+  [
+    "a cutoff past every turn seq yields the summary and no turns",
+    () => {
+      const all = [
+        msg({seq: 1, kind: "chat"}),
+        msg({seq: 2, kind: "chat"}),
+        msg({seq: 3, kind: "summary", compactedThroughSeq: 99}),
+      ];
+      const {summary, turns} = effectiveHistory(all);
+      assert.equal(summary?.seq, 3);
+      assert.deepEqual(turns.map((t) => t.seq), []);
+    },
+  ],
+  [
+    "the latest summary's cutoff wins even when it moves backward",
+    () => {
+      // A later compaction can legitimately cover fewer turns than an earlier
+      // one (e.g. after turns were dropped). The newest summary is still the
+      // sole authority — the older, larger cutoff must not leak through.
+      const all = [
+        msg({seq: 1, kind: "chat"}),
+        msg({seq: 2, kind: "chat"}),
+        msg({seq: 3, kind: "summary", compactedThroughSeq: 2}),
+        msg({seq: 4, kind: "chat"}),
+        msg({seq: 5, kind: "summary", compactedThroughSeq: 1}),
+        msg({seq: 6, kind: "chat"}),
+      ];
+      const {summary, turns} = effectiveHistory(all);
+      assert.equal(summary?.seq, 5);
+      // Cutoff 1 (from seq-5 summary) applies, so every chat turn after seq 1
+      // survives — including seq 2, which the earlier summary had covered.
+      assert.deepEqual(turns.map((t) => t.seq), [2, 4, 6]);
+    },
+  ],
+  [
+    "turns after the cutoff keep their order and role",
+    () => {
+      const all = [
+        msg({seq: 1, kind: "chat", role: "user"}),
+        msg({seq: 2, kind: "summary", compactedThroughSeq: 1}),
+        msg({seq: 3, kind: "chat", role: "user"}),
+        msg({seq: 4, kind: "chat", role: "assistant"}),
+        msg({seq: 5, kind: "chat", role: "user"}),
+      ];
+      const {turns} = effectiveHistory(all);
+      assert.deepEqual(
+        turns.map((t) => [t.seq, t.role]),
+        [[3, "user"], [4, "assistant"], [5, "user"]],
+      );
+    },
+  ],
+  [
+    "a summary as the final message leaves no trailing turns",
+    () => {
+      const all = [
+        msg({seq: 1, kind: "chat"}),
+        msg({seq: 2, kind: "chat"}),
+        msg({seq: 3, kind: "summary", compactedThroughSeq: 2}),
+      ];
+      const {summary, turns} = effectiveHistory(all);
+      assert.equal(summary?.seq, 3);
+      assert.deepEqual(turns, []);
+    },
+  ],
 ];
 
-let failed = 0;
-for (const [name, fn] of TESTS) {
-  try {
-    fn();
-    console.log(`ok - ${name}`);
-  } catch (err) {
-    failed += 1;
-    console.error(`FAIL - ${name}`);
-    console.error(err);
-  }
-}
-if (failed > 0) {
-  console.error(`${failed}/${TESTS.length} tests failed`);
-  process.exit(1);
-}
-console.log(`all ${TESTS.length} tests passed`);
+void main("effectiveHistory (pure)", TESTS);
