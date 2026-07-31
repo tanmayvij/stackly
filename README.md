@@ -19,8 +19,9 @@
 7. [Deployment notes](#deployment-notes)
 8. [Getting started with the app](#getting-started-with-the-app)
 9. [Architecture decisions](#architecture-decisions)
-10. [Future improvements](#future-improvements)
-11. [Demo video](#demo-video)
+10. [Future product improvements](#future-product-improvements)
+11. [Future architectural improvements](#future-architectural-improvements)
+12. [Demo video](#demo-video)
 
 ---
 
@@ -302,13 +303,28 @@ This is the important part. The repository has a GitHub Action ([`.github/workfl
 
 ---
 
-## Future improvements
+## Future product improvements
 
 - **Richer billing** — saved cards, auto-recharge, payment history, and downloadable invoices.
 - **Team management and role-based access control** within a team.
 - **Git integration** — let users sync their generated code with their own remote (GitHub, etc.).
 - **Scope-aware AI** — allow users to grant a limited set of GHL scopes and have the AI detect when it lacks the right scope (or hits a 401) and tell the user, rather than failing opaquely.
 - **Non-blocking project creation** — `createProject` currently waits on the LLM call before returning, but the LLM's output (name/description) is just metadata, not critical to creation. The project could be created immediately with a placeholder name, while the LLM call runs in the background and updates the name/description on the Firestore doc once ready.
+
+---
+
+## Future architectural improvements
+
+Known weaknesses in the current design, roughly in priority order. Each names the specific behaviour that motivates it.
+
+- **Optimistic balance hold instead of a flat pre-flight gate.** Today a run is admitted if the balance is above a flat `LOW_BALANCE_THRESHOLD_CENTS` ($1) and the wallet is debited only *after* generation, with no ceiling — so a user sitting at exactly $1 can start an arbitrarily expensive turn, and `addTransaction` has no floor, so the balance can go negative. The prompt's token count is known before the call and the output can be estimated, so the run should place a **hold** sized to that estimate, top the hold up mid-stream when it proves short, and only interrupt when the balance is genuinely exhausted — cutting **after the current `<file>` block closes**, never mid-content, so a partial file is never produced. That last part is exactly why no `max_tokens` is set today (see [docs/VARIANTS.md](docs/VARIANTS.md)); the cap belongs here, enforced at a file boundary, rather than at the provider.
+- **Serialize GHL token refresh, and expose a reconnect path.** `refreshConnection` is unguarded and reachable from two places in the proxy (pre-emptive refresh, and retry-on-401). Two concurrent proxied requests past the refresh margin will both present the **same** stored refresh token; HighLevel rotates refresh tokens on use, so one succeeds and the other is rejected — and the two `writeConnection` calls race, so a stale token pair can overwrite the fresh one. The connection is then permanently unrefreshable: the proxy returns `ghl_refresh_failed` forever, nothing detects the state, and the only escape is for the user to guess they should disconnect and reconnect. Needs a per-uid lock (or a transactional compare-and-set on the stored refresh token) plus a surfaced "reconnect required" state.
+- **Cache GHL access tokens.** The proxy reads `ghlConnections/{uid}` from Firestore on **every** forwarded request, so a generated app paginating a contact list pays one document read per page. The access token is valid for its whole lifetime and the proxy is already warm per instance — an in-memory cache keyed by uid and invalidated on refresh/expiry (the same shape as the existing preview-token and blob caches) removes nearly all of those reads.
+- **Harden GHL token storage and revoke on disconnect.** `disconnectGhl` deletes the Firestore document but never calls HighLevel's revoke endpoint, so the access and refresh tokens stay valid upstream until they expire naturally — "disconnected" in our UI is not disconnected at the provider. Tokens are also stored as plain string fields; Firestore encrypts at rest at the platform level, but that means any Admin-SDK read or backup export yields live credentials. Application-layer encryption (Cloud KMS envelope encryption, or Secret Manager for the refresh token) would make a database read insufficient on its own.
+- **Rate-limit the GHL proxy.** `ghlProxy` enforces a path allowlist, pins the location id, and requires a valid preview token, but applies **no quota**. A generated app with a render-loop bug can burn the customer's HighLevel API quota, and a leaked 30-minute preview token is an unmetered proxy into that location for its lifetime. Needs per-uid and per-token rate limits with an explicit `429`, and ideally a per-project daily ceiling.
+- **Fencing tokens for the generation lock.** The chat lock is a lease: `acquireChatLock` steals one that has not been renewed for 60s, which correctly stops a crashed instance from blocking retries forever. But no writer verifies ownership at write time — `writeUserMessage`, `writeSummaryMessage`, `writeAssistantMessage` and the commit path all write unconditionally. A instance that stalls (GC pause, network partition) past the steal window can therefore resume and keep writing after another run has taken over, interleaving two generations on one project. This is the failure Kleppmann describes for lease-based locks: the fix is a monotonically increasing **fencing token** issued with the lease, stamped onto every write, and rejected by the writer when it is lower than the newest token seen.
+- **Make the Firestore rules deny-by-default in shape, not just in effect.** Absence of an `allow` is already a deny, and there is a trailing catch-all, so nothing is currently over-granted by accident at the *path* level. The weakness is the project document's `update` rule, which grants a broad write and then **blocklists** the fields the server owns (`initialPrompt`, `lastMessageSeq`). Every new server-managed field is therefore writable by the client until somebody remembers to extend that list — and one already slipped through: `compactedThroughSeq` is written by the compaction path and read as the history cutoff, but is absent from the blocklist, so a client can raise it and silently drop its own conversation history out of the prompt. Inverting this to an allowlist of the handful of client-mutable fields (`name`, `description`, `deleted`, `headVersion`, `lastModified`) makes new server fields safe by default, and the rules test suite should assert that shape rather than enumerate known-bad writes.
+- **Queue-based generation workers.** Generation runs inline in the `onRequest` handler, so its lifetime is the HTTP request's: a 540s ceiling, `concurrency: 8` per instance, and no retry or backpressure — a dropped connection aborts the upstream call and the turn is lost. Moving generation onto a queue (Cloud Tasks or Pub/Sub) with dedicated workers would decouple it from the request, survive disconnects, and give real backpressure and retries under load. The tension to resolve first is streaming: SSE currently works precisely *because* the generating process owns the response socket, so a queued design needs a separate delivery channel for the token stream — Firestore-backed chunks, or a resumable stream the client reattaches to — which is a meaningful redesign rather than a drop-in change.
 
 ---
 
