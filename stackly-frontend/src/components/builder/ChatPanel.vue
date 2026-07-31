@@ -12,6 +12,7 @@ import {
   TriangleAlert,
 } from '@lucide/vue'
 import ChatFileDiff from '@/components/builder/ChatFileDiff.vue'
+import VariantChooser from '@/components/builder/VariantChooser.vue'
 import type { ChatMessageDoc } from '@/lib/chat-repo'
 import { useBuilderStore } from '@/stores/builder'
 
@@ -80,6 +81,7 @@ watch(
     builder.phase,
     builder.localEcho,
     builder.chatError,
+    builder.pendingTurn,
   ],
   async () => {
     // Sticky scroll: only follow the stream if the user is already near the
@@ -99,10 +101,18 @@ function autoGrow() {
 }
 
 function send(text: string) {
-  if (builder.isStreaming) return
+  if (builder.isBusy) return
   builder.sendMessage(text)
   draft.value = ''
   nextTick(autoGrow)
+}
+
+// The composer is closed while a turn is pending: that turn isn't finished
+// until one of its options is applied or discarded.
+function composerPlaceholder() {
+  if (builder.pendingTurn) return 'Keep or discard an option to continue…'
+  if (builder.isStreaming) return 'Generating…'
+  return 'Ask Stackly to change the app…'
 }
 </script>
 
@@ -272,23 +282,34 @@ function send(text: string) {
           >
             {{ builder.streamingText }}
           </p>
-          <div v-if="builder.streamingFiles.size" class="flex flex-wrap gap-1.5">
-            <span
-              v-for="[path, state] in builder.streamingFiles"
-              :key="path"
-              class="text-muted-foreground bg-muted flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono text-xs"
-            >
-              <LoaderCircle v-if="state === 'writing'" class="size-3 shrink-0 animate-spin" />
-              <Check v-else class="size-3 shrink-0 text-green-500" />
-              <span class="max-w-48 truncate">{{ path }}</span>
+          <div v-if="builder.streamingFiles.size" class="flex flex-col gap-1.5">
+            <span v-if="builder.streamingVariantRank" class="text-muted-foreground text-xs">
+              Drafting option {{ builder.streamingVariantRank
+              }}<template v-if="builder.streamingVariantSummary">
+                — {{ builder.streamingVariantSummary }}</template
+              >…
             </span>
+            <div class="flex flex-wrap gap-1.5">
+              <span
+                v-for="[key, file] in builder.streamingFiles"
+                :key="key"
+                class="text-muted-foreground bg-muted flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono text-xs"
+              >
+                <LoaderCircle
+                  v-if="file.state === 'writing'"
+                  class="size-3 shrink-0 animate-spin"
+                />
+                <Check v-else class="size-3 shrink-0 text-green-500" />
+                <span class="max-w-48 truncate">{{ file.path }}</span>
+              </span>
+            </div>
           </div>
           <div
             v-if="builder.phase"
             class="text-muted-foreground flex items-center gap-1.5 text-xs"
           >
             <LoaderCircle class="size-3 animate-spin" />
-            {{ builder.phase === 'compacting' ? 'Compacting conversation…' : 'Committing version…' }}
+            Compacting conversation…
           </div>
           <div v-if="builder.isTyping" class="flex items-center gap-1 py-1">
             <span class="animate-typing-dot bg-link size-1.5 rounded-full" />
@@ -297,6 +318,8 @@ function send(text: string) {
           </div>
         </div>
       </div>
+
+      <VariantChooser />
     </div>
 
     <div class="shrink-0 border-t p-3">
@@ -374,8 +397,8 @@ function send(text: string) {
           ref="textareaEl"
           v-model="draft"
           rows="1"
-          :disabled="builder.isStreaming"
-          :placeholder="builder.isStreaming ? 'Generating…' : 'Ask Stackly to change the app…'"
+          :disabled="builder.isBusy"
+          :placeholder="composerPlaceholder()"
           class="placeholder:text-muted-foreground max-h-30 w-full resize-none bg-transparent text-sm outline-none disabled:opacity-60"
           @input="autoGrow"
           @keydown.enter.exact.prevent="send(draft)"
@@ -392,7 +415,7 @@ function send(text: string) {
         <button
           v-else
           type="button"
-          :disabled="!draft.trim()"
+          :disabled="!draft.trim() || builder.isBusy"
           class="bg-primary flex size-7.5 shrink-0 cursor-pointer items-center justify-center rounded-lg text-white transition-opacity disabled:opacity-50"
           @click="send(draft)"
         >

@@ -8,11 +8,16 @@ import {createHash} from "node:crypto";
 import {FieldValue, getFirestore} from "firebase-admin/firestore";
 import {getStorage} from "firebase-admin/storage";
 import {
+  DEFAULT_VERSION_TITLE,
+  MAX_VERSION_TITLE_CHARS,
+} from "../../../shared/config";
+import {
   GHL_CLIENT_SHA256,
   GHL_CLIENT_SOURCE,
 } from "../../ghl/generated-client";
 import {
   AssistantMessageInput,
+  HistoryMessage,
   assistantMessageData,
 } from "../messages/messages.service";
 import {userProjectRef} from "../../../shared/firestore/refs";
@@ -103,16 +108,98 @@ export async function readTree(
 }
 
 /**
- * Applies the model's writes/deletes to the head tree, uploading new blobs
- * and injecting the platform-owned GHL client when missing or outdated.
+ * Derives the committed version's title from the triggering user turn.
+ * @param {HistoryMessage[]} turns The effective conversation turns.
+ * @return {string} A short single-line title.
+ */
+export function versionTitle(turns: HistoryMessage[]): string {
+  const max = MAX_VERSION_TITLE_CHARS;
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const turn = turns[i];
+    if (turn?.role === "user") {
+      const line = turn.content.replace(/\s+/g, " ").trim();
+      if (line) {
+        return line.length > max ? `${line.slice(0, max - 3)}...` : line;
+      }
+    }
+  }
+  return DEFAULT_VERSION_TITLE;
+}
+
+/**
+ * Reports which of the given blobs are not in Storage. The client uploads the
+ * blobs for the variant it applies, so a commit must never trust that they
+ * landed — a version referencing a missing blob is unrecoverable.
+ * @param {string} uid The owner's uid.
+ * @param {string} projectId The project id.
+ * @param {string[]} hashes The blob hashes to check.
+ * @return {Promise<string[]>} The hashes that are absent.
+ */
+export async function missingBlobs(
+  uid: string,
+  projectId: string,
+  hashes: string[],
+): Promise<string[]> {
+  const unique = [...new Set(hashes)];
+  const results = await Promise.all(
+    unique.map(async (hash) => {
+      const [exists] = await blobFile(uid, projectId, hash).exists();
+      return exists ? null : hash;
+    }),
+  );
+  return results.filter((h): h is string => h !== null);
+}
+
+export interface PlatformFile {
+  path: string;
+  hash: string;
+}
+
+/**
+ * The platform-owned files this tree is missing, with their blobs uploaded so
+ * they can be fetched immediately.
+ *
+ * Generated apps import `./lib/ghl`, and the platform owns that file — the
+ * model never writes it. A commit injects it, but the PREVIEW of an
+ * uncommitted variant needs it too: a project that has never committed has no
+ * copy of it at head and no blob for it in Storage, so its very first
+ * generation would fail to bundle. Both callers go through here so the
+ * condition and the upload are stated once.
+ * @param {string} uid The owner's uid.
+ * @param {string} projectId The project id.
+ * @param {Manifest} tree The tree to check.
+ * @return {Promise<PlatformFile[]>} Files to add, empty when already current.
+ */
+export async function ensurePlatformFiles(
+  uid: string,
+  projectId: string,
+  tree: Manifest,
+): Promise<PlatformFile[]> {
+  if (tree[GHL_CLIENT_PATH] === GHL_CLIENT_SHA256) return [];
+  await uploadBlobIfAbsent(
+    uid,
+    projectId,
+    GHL_CLIENT_SHA256,
+    GHL_CLIENT_SOURCE,
+  );
+  return [{path: GHL_CLIENT_PATH, hash: GHL_CLIENT_SHA256}];
+}
+
+/**
+ * Rebases a variant's changes onto the CURRENT head tree and injects the
+ * platform-owned GHL client when missing or outdated.
+ *
+ * The changes are a delta of blob hashes, not a snapshot, so a manual commit
+ * that advanced head while the user was choosing between variants survives
+ * instead of being silently reverted.
  * @param {string} uid The owner's uid.
  * @param {string} projectId The project id.
  * @param {Manifest} head The current head manifest.
- * @param {Map<string, string>} writes path → full new content.
+ * @param {Map<string, string>} writes path → blob sha256.
  * @param {Set<string>} deletes Paths to remove.
  * @return {Promise<Manifest>} The new manifest, ready to commit.
  */
-export async function applyResponseToTree(
+export async function rebaseOntoTree(
   uid: string,
   projectId: string,
   head: Manifest,
@@ -121,20 +208,14 @@ export async function applyResponseToTree(
 ): Promise<Manifest> {
   const tree: Manifest = {...head};
   for (const path of deletes) delete tree[path];
-  writes.delete(GHL_CLIENT_PATH);
+  for (const [path, hash] of writes) {
+    if (path === GHL_CLIENT_PATH) continue;
+    tree[path] = hash;
+  }
 
-  const needsGhlClient = tree[GHL_CLIENT_PATH] !== GHL_CLIENT_SHA256;
-  await Promise.all([
-    ...Array.from(writes, ([path, content]) => {
-      const hash = sha256Hex(content);
-      tree[path] = hash;
-      return uploadBlobIfAbsent(uid, projectId, hash, content);
-    }),
-    ...(needsGhlClient ?
-      [uploadBlobIfAbsent(uid, projectId, GHL_CLIENT_SHA256, GHL_CLIENT_SOURCE)] :
-      []),
-  ]);
-  if (needsGhlClient) tree[GHL_CLIENT_PATH] = GHL_CLIENT_SHA256;
+  for (const file of await ensurePlatformFiles(uid, projectId, tree)) {
+    tree[file.path] = file.hash;
+  }
 
   return tree;
 }

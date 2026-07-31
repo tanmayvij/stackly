@@ -83,3 +83,41 @@ export const mintPreviewToken = callable<
   void,
   { token: string; expiresAtMs: number; locationId: string }
 >('mintPreviewToken')
+
+/** The conversational half of a generation turn, echoed back on resolution. */
+export interface TurnPayloadRequest {
+  projectId: string
+  requestId: string
+  reply: string
+  summary: string
+  /** Version title and head, both pinned when the generation finished. */
+  title: string
+  baseVersion: number
+  questions: { text: string; choices: string[] }[]
+  suggestions: { label: string; prompt: string }[]
+}
+
+/**
+ * Commits the variant the user picked, plus the assistant message for that
+ * turn. Idempotent on `requestId`, and the changes are rebased onto the
+ * current head server-side. Fails with `failed-precondition` if the blobs were
+ * not uploaded, or `aborted` if a file the variant rewrites has changed since
+ * it was generated (another tab or session committed over it).
+ */
+export const applyVariant = callable<
+  TurnPayloadRequest & {
+    writes: { path: string; hash: string }[]
+    deletes: string[]
+  },
+  { versionN: number | null; applied: boolean }
+>('applyVariant')
+
+/**
+ * Drops the pending variants without committing. Records the turn as
+ * interrupted so it stays reconciled with the wallet debit the generation
+ * already took.
+ */
+export const discardVariants = callable<
+  TurnPayloadRequest,
+  { versionN: number | null; discarded: boolean }
+>('discardVariants')

@@ -28,6 +28,10 @@ export {createProject} from "./modules/projects/projects.controller";
 
 // builder (AI code-generation chat)
 export {chat} from "./modules/builder/chat/chat.controller";
+export {
+  applyVariant,
+  discardVariants,
+} from "./modules/builder/variants/variants.controller";
 
 // preview
 export {mintPreviewToken} from "./modules/preview/preview.controller";

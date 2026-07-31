@@ -108,7 +108,9 @@ async function confirmDelete() {
       </span>
       <button
         type="button"
-        class="text-muted-foreground hover:text-foreground -mr-1 cursor-pointer rounded-md p-1 transition-colors"
+        :disabled="builder.filesLocked"
+        :title="builder.filesLocked ? 'Choose an option first' : 'New file'"
+        class="text-muted-foreground hover:text-foreground -mr-1 cursor-pointer rounded-md p-1 transition-colors disabled:cursor-default disabled:opacity-40"
         aria-label="New file"
         @click="openCreate(null)"
       >
@@ -134,7 +136,7 @@ async function confirmDelete() {
         <FileText v-else class="size-3.5 shrink-0 text-sky-500" />
         <span class="flex-1 truncate">{{ row.name }}</span>
 
-        <DropdownMenu>
+        <DropdownMenu v-if="!builder.filesLocked">
           <DropdownMenuTrigger as-child @click.stop>
             <button
               type="button"

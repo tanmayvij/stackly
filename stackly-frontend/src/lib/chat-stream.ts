@@ -35,19 +35,52 @@ export interface ChatRequestBody {
   answers?: ChatAnswer[]
 }
 
-export type ChatPhase = 'starting' | 'compacting' | 'generating' | 'committing'
+export type ChatPhase = 'starting' | 'compacting' | 'generating'
 
+/**
+ * One alternative implementation the model produced, as announced when the
+ * stream is done. `writes` carries the server's sha256 for each file so the
+ * client can verify the contents it assembled from the `file-delta` frames
+ * (the SSE reader skips malformed frames silently) and name the blobs it
+ * uploads when the user applies this variant.
+ */
+export interface ChatVariantSummary {
+  index: number
+  rank: number
+  summary: string
+  writes: { path: string; hash: string }[]
+  deletes: string[]
+}
+
+// File events carry the variant they belong to, and their paths are already
+// normalized server-side so they match the paths in ChatVariantSummary.
 export type ChatStreamEvent =
   | { type: 'user-message'; id: string; seq: number }
   | { type: 'status'; phase: ChatPhase }
   | { type: 'reply-delta'; text: string }
-  | { type: 'file-start'; path: string }
-  | { type: 'file-delta'; path: string; text: string }
-  | { type: 'file-end'; path: string }
-  | { type: 'file-delete'; path: string }
+  | { type: 'variant-start'; variant: number; rank: number | null }
+  | { type: 'variant-summary'; variant: number; text: string }
+  | { type: 'variant-end'; variant: number }
+  | { type: 'file-start'; variant: number; path: string }
+  | { type: 'file-delta'; variant: number; path: string; text: string }
+  | { type: 'file-end'; variant: number; path: string }
+  | { type: 'file-delete'; variant: number; path: string }
   | { type: 'question'; text: string; choices: string[] }
   | { type: 'suggestion'; label: string; prompt: string }
-  | { type: 'version'; n: number; title: string }
+  | {
+      type: 'variants'
+      requestId: string
+      // Head at generation time, and the version title for the user turn this
+      // generation answers. Both are pinned server-side because another tab can
+      // advance head and append a newer user turn while the options wait.
+      baseVersion: number
+      title: string
+      // Platform-owned files (src/lib/ghl.js) the head tree doesn't have yet.
+      // Preview-only: the commit injects them server-side regardless. Without
+      // them a first generation can't resolve its own `./lib/ghl` import.
+      platformFiles: { path: string; hash: string }[]
+      variants: ChatVariantSummary[]
+    }
   | { type: 'message'; id: string; status: string }
   | { type: 'done'; ok: true }
   | { type: 'error'; code: string; message: string }

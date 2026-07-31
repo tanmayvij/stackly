@@ -6,47 +6,30 @@ import { fetchBlob } from '@/lib/builder-repo'
 import { useAuthStore } from '@/stores/auth'
 import { useBuilderStore } from '@/stores/builder'
 
-// Diff of one file between versionN-1 and versionN, resolved from the
-// content-addressed blob store. Mounted only while expanded, so collapsed rows
-// cost nothing.
-const props = defineProps<{ path: string; versionN: number }>()
+// Diff of one file in an uncommitted variant: the current head blob against
+// the content held in memory. `modified` is empty for a delete.
+const props = defineProps<{ path: string; content: string | null }>()
 const emit = defineEmits<{ stats: [{ additions: number; deletions: number }] }>()
 
 const builder = useBuilderStore()
 const auth = useAuthStore()
 
 const original = ref<string | null>(null)
-const modified = ref('')
 const error = ref(false)
 
 async function load() {
   const uid = auth.user?.uid
   const pid = builder.projectId
-  const version = builder.versions.find((v) => v.n === props.versionN)
-  if (!uid || !pid || !version) return
-  const prev = builder.versions.find((v) => v.n === props.versionN - 1)
-  const oldHash = prev?.tree[props.path] ?? null
-  const newHash = version.tree[props.path] ?? null
+  if (!uid || !pid) return
+  const hash = builder.headManifest[props.path]
   try {
-    const [oldText, newText] = await Promise.all([
-      oldHash ? fetchBlob(uid, pid, oldHash) : Promise.resolve(''),
-      newHash ? fetchBlob(uid, pid, newHash) : Promise.resolve(''),
-    ])
-    modified.value = newText
-    original.value = oldText
+    original.value = hash ? await fetchBlob(uid, pid, hash) : ''
   } catch {
     error.value = true
   }
 }
 
-// Versions can land after deep-history messages render; retry until found.
-watch(
-  () => builder.versions.length,
-  () => {
-    if (original.value === null && !error.value) void load()
-  },
-  { immediate: true },
-)
+watch(() => props.path, () => void load(), { immediate: true })
 </script>
 
 <template>
@@ -59,7 +42,7 @@ watch(
       v-else
       :path="path"
       :original="original"
-      :modified="modified"
+      :modified="content ?? ''"
       @stats="(s) => emit('stats', s)"
     />
   </div>

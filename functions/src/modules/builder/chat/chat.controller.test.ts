@@ -1,5 +1,5 @@
 // Self-running unit tests for the pure request-shaping helpers in
-// chat.controller.ts: answer validation/rendering and version-title derivation.
+// chat.controller.ts: answer validation and rendering.
 // Run with plain Node: `node lib/modules/builder/chat/chat.controller.js` is
 // the handler; this compiles to chat.controller.test.js. The streaming/stateful
 // runGeneration path is covered by the emulator tests, not here.
@@ -7,33 +7,7 @@
 import assert from "node:assert";
 import {Test, main} from "../../../test/harness";
 import {MAX_ANSWER_CHARS} from "../../../shared/config";
-import {HistoryMessage} from "../messages/messages.service";
-import {parseAnswers, renderAnswers, versionTitle} from "./chat.controller";
-
-/**
- * Minimal HistoryMessage builder for versionTitle (which only reads role and
- * content).
- * @param {"user" | "assistant" | "system"} role The turn role.
- * @param {string} content The turn text.
- * @return {HistoryMessage} A message with defaults for the unused fields.
- */
-function turn(
-  role: "user" | "assistant" | "system",
-  content: string,
-): HistoryMessage {
-  return {
-    id: "id",
-    kind: "chat",
-    role,
-    seq: 0,
-    content,
-    files: [],
-    questions: [],
-    status: null,
-    contextTokens: 0,
-    compactedThroughSeq: 0,
-  };
-}
+import {parseAnswers, renderAnswers} from "./chat.controller";
 
 const TESTS: Test[] = [
   [
@@ -85,34 +59,6 @@ const TESTS: Test[] = [
         {question: "Size?", choice: "large"},
       ]);
       assert.equal(rendered, "Q: Color?\nA: blue\n\nQ: Size?\nA: large");
-    },
-  ],
-  [
-    "versionTitle uses the last user turn, collapsing whitespace",
-    () => {
-      const title = versionTitle([
-        turn("user", "first request"),
-        turn("assistant", "did it"),
-        turn("user", "add   a\nsearch\tbox"),
-      ]);
-      assert.equal(title, "add a search box");
-    },
-  ],
-  [
-    "versionTitle truncates a long title to 57 chars + ellipsis",
-    () => {
-      const long = "a".repeat(80);
-      const title = versionTitle([turn("user", long)]);
-      assert.equal(title.length, 60);
-      assert.equal(title, "a".repeat(57) + "...");
-    },
-  ],
-  [
-    "versionTitle skips blank user turns and falls back to \"AI update\"",
-    () => {
-      assert.equal(versionTitle([turn("assistant", "no user here")]), "AI update");
-      assert.equal(versionTitle([turn("user", "   ")]), "AI update");
-      assert.equal(versionTitle([]), "AI update");
     },
   ],
 ];

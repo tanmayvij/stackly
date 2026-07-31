@@ -1,10 +1,10 @@
 // Emulator-backed tests for the atomic version commit and content-addressed
 // blob storage (versions.service.ts): the transactional head+1 slot allocation
-// with its concurrent-collision skip, and the immutable blob upload / tree
-// application including platform-owned GHL client injection. Exported as a
-// Suite, run by test/run-emulator.ts against the Firestore + Storage emulators
-// with state cleared before each test. The pure hash lives in
-// versions.service.test.ts.
+// with its concurrent-collision skip, the immutable blob upload, blob presence
+// checks, and the delta rebase including platform-owned GHL client injection.
+// Exported as a Suite, run by test/run-emulator.ts against the Firestore +
+// Storage emulators with state cleared before each test. The pure helpers live
+// in versions.service.test.ts.
 
 import assert from "node:assert";
 import {getStorage} from "firebase-admin/storage";
@@ -19,10 +19,12 @@ import {GHL_CLIENT_SHA256} from "../../ghl/generated-client";
 import {
   GHL_CLIENT_PATH,
   Manifest,
-  applyResponseToTree,
   commitAiVersionAndMessage,
+  ensurePlatformFiles,
   fetchBlob,
+  missingBlobs,
   readTree,
+  rebaseOntoTree,
   sha256Hex,
   uploadBlobIfAbsent,
 } from "./versions.service";
@@ -143,43 +145,85 @@ const tests: Test[] = [
     },
   ],
   [
-    "applyResponseToTree uploads new blobs and injects the GHL client",
+    "missingBlobs reports only the hashes absent from Storage",
     async () => {
-      const tree = await applyResponseToTree(
-        UID, PID, {}, new Map([["src/App.jsx", "the code"]]), new Set(),
+      const present = sha256Hex("here");
+      await uploadBlobIfAbsent(UID, PID, present, "here");
+      const absent = sha256Hex("gone");
+      assert.deepEqual(
+        await missingBlobs(UID, PID, [present, absent, absent]), [absent]);
+      assert.deepEqual(await missingBlobs(UID, PID, []), []);
+    },
+  ],
+  [
+    "ensurePlatformFiles uploads the GHL client for a never-committed project",
+    async () => {
+      // The preview of a first generation reads this straight from Storage, so
+      // returning the path without the blob present would still fail to bundle.
+      assert.equal(await blobExists(GHL_CLIENT_SHA256), false);
+      const files = await ensurePlatformFiles(UID, PID, {});
+      assert.deepEqual(files, [
+        {path: GHL_CLIENT_PATH, hash: GHL_CLIENT_SHA256},
+      ]);
+      assert.equal(await blobExists(GHL_CLIENT_SHA256), true);
+    },
+  ],
+  [
+    "ensurePlatformFiles is a no-op once the tree has the current client",
+    async () => {
+      const current: Manifest = {[GHL_CLIENT_PATH]: GHL_CLIENT_SHA256};
+      assert.deepEqual(await ensurePlatformFiles(UID, PID, current), []);
+      // An outdated copy still needs replacing.
+      const stale: Manifest = {[GHL_CLIENT_PATH]: sha256Hex("old client")};
+      assert.equal((await ensurePlatformFiles(UID, PID, stale)).length, 1);
+    },
+  ],
+  [
+    "rebaseOntoTree applies a hash delta and injects the GHL client",
+    async () => {
+      const hash = sha256Hex("the code");
+      await uploadBlobIfAbsent(UID, PID, hash, "the code");
+      const tree = await rebaseOntoTree(
+        UID, PID, {}, new Map([["src/App.jsx", hash]]), new Set(),
       );
-      assert.equal(tree["src/App.jsx"], sha256Hex("the code"));
+      assert.equal(tree["src/App.jsx"], hash);
       assert.equal(tree[GHL_CLIENT_PATH], GHL_CLIENT_SHA256);
-      assert.equal(await blobExists(sha256Hex("the code")), true);
       assert.equal(await blobExists(GHL_CLIENT_SHA256), true);
       assert.equal(await fetchBlob(UID, PID, tree["src/App.jsx"] as string),
         "the code");
     },
   ],
   [
-    "applyResponseToTree applies deletes and leaves a current GHL client alone",
+    "rebaseOntoTree keeps head files the variant never touched",
     async () => {
+      // The delta is rebased, not a snapshot: a manual commit made while the
+      // user was choosing between variants must survive.
       const head: Manifest = {
-        "old.js": "hash-old", [GHL_CLIENT_PATH]: GHL_CLIENT_SHA256,
+        "kept.js": "hash-kept",
+        "old.js": "hash-old",
+        [GHL_CLIENT_PATH]: GHL_CLIENT_SHA256,
       };
-      const tree = await applyResponseToTree(
-        UID, PID, head, new Map(), new Set(["old.js"]),
+      const tree = await rebaseOntoTree(
+        UID, PID, head, new Map([["new.js", sha256Hex("x")]]),
+        new Set(["old.js"]),
       );
+      assert.equal(tree["kept.js"], "hash-kept");
       assert.equal("old.js" in tree, false);
+      assert.equal(tree["new.js"], sha256Hex("x"));
       assert.equal(tree[GHL_CLIENT_PATH], GHL_CLIENT_SHA256);
     },
   ],
   [
-    "applyResponseToTree drops a model attempt to overwrite the GHL client",
+    "rebaseOntoTree drops an attempt to overwrite the GHL client",
     async () => {
       const head: Manifest = {[GHL_CLIENT_PATH]: GHL_CLIENT_SHA256};
-      const tree = await applyResponseToTree(
-        UID, PID, head, new Map([[GHL_CLIENT_PATH, "malicious override"]]),
+      const tree = await rebaseOntoTree(
+        UID, PID, head,
+        new Map([[GHL_CLIENT_PATH, sha256Hex("malicious override")]]),
         new Set(),
       );
-      // The protected path keeps the platform hash, not the model's content.
+      // The protected path keeps the platform hash.
       assert.equal(tree[GHL_CLIENT_PATH], GHL_CLIENT_SHA256);
-      assert.notEqual(tree[GHL_CLIENT_PATH], sha256Hex("malicious override"));
     },
   ],
 ];

@@ -13,7 +13,13 @@ import {
   type Manifest,
   type Version,
 } from '@/lib/builder-repo'
-import { subscribeMessages, type ChatMessageDoc, type ChatQuestion } from '@/lib/chat-repo'
+import {
+  subscribeMessages,
+  type ChatMessageDoc,
+  type ChatQuestion,
+  type ChatSuggestion,
+} from '@/lib/chat-repo'
+import { applyVariant as applyVariantCall, discardVariants } from '@/lib/callables'
 import {
   GenerationInProgressError,
   InsufficientBalanceError,
@@ -21,12 +27,56 @@ import {
   type ChatAnswer,
   type ChatRequestBody,
   type ChatStreamEvent,
+  type ChatVariantSummary,
 } from '@/lib/chat-stream'
 import type { Unsubscribe } from 'firebase/firestore'
 
 export type BuilderTab = 'chat' | 'code'
 export type DeviceKind = 'phone' | 'desktop'
-export type StreamPhase = 'compacting' | 'committing' | null
+export type StreamPhase = 'compacting' | null
+
+/** One alternative the model produced, held in memory until the user chooses. */
+export interface PendingVariant {
+  index: number
+  rank: number
+  summary: string
+  /** path → full file content, assembled from the stream. */
+  contents: Map<string, string>
+  /** path → server sha256, used to name the blob on apply. */
+  hashes: Map<string, string>
+  deletes: string[]
+}
+
+/**
+ * A finished generation whose changes are NOT committed yet. Deliberately
+ * client-only and session-scoped: the file contents live here and nowhere
+ * else until the user applies one variant, at which point the blobs are
+ * uploaded and the server commits the version plus the assistant message.
+ * A reload therefore drops the turn, leaving the user message resumable.
+ */
+export interface PendingTurn {
+  projectId: string
+  requestId: string
+  reply: string
+  /** Version title and head, both pinned when the generation finished. */
+  title: string
+  baseVersion: number
+  /**
+   * Platform-owned files head doesn't have yet (src/lib/ghl.js). Preview-only:
+   * the commit injects them server-side. Needed because a generated app imports
+   * `./lib/ghl`, and a project's first generation has no copy of it at head.
+   */
+  platformFiles: { path: string; hash: string }[]
+  questions: ChatQuestion[]
+  suggestions: ChatSuggestion[]
+  variants: PendingVariant[]
+}
+
+export interface StreamingFile {
+  variant: number
+  path: string
+  state: 'writing' | 'done'
+}
 
 export interface TreeRow {
   id: string
@@ -108,10 +158,24 @@ export const useBuilderStore = defineStore('builder', () => {
   const messagesLoaded = ref(false)
   const isStreaming = ref(false)
   const streamingText = ref('')
-  const streamingFiles = reactive(new Map<string, 'writing' | 'done'>())
+  // Keyed `${variant}:${path}`; cleared when the model moves to the next
+  // variant, so the chips always show the option currently being written.
+  const streamingFiles = reactive(new Map<string, StreamingFile>())
+  const streamingVariantRank = ref<number | null>(null)
+  const streamingVariantSummary = ref('')
   const phase = ref<StreamPhase>(null)
   const chatError = ref<string | null>(null)
   const insufficientBalance = ref(false)
+
+  // The finished-but-uncommitted turn awaiting the user's choice, and which of
+  // its variants is currently being previewed.
+  const pendingTurn = ref<PendingTurn | null>(null)
+  const previewVariantIndex = ref<number | null>(null)
+  const isApplying = ref(false)
+  // Set when a file this turn rewrites has already been changed by another tab
+  // or session. Terminal: head only moves forward, so applying can never
+  // succeed after this and only Discard is left.
+  const variantConflict = ref<string | null>(null)
   // Another run (zombie after a dropped connection, or a second tab) holds
   // the server-side generation lock — its result arrives via the messages
   // listener, so this is informational, not an error.
@@ -129,6 +193,23 @@ export const useBuilderStore = defineStore('builder', () => {
   let streamAbort: AbortController | null = null
   let lastRequest: ChatRequestBody | null = null
   let autoRunAttempted = false
+  // Per-run stream scratch for the variants: file content chunks keyed
+  // `${variant}:${path}`, and the `variants` frame that ends the stream
+  // (resolved once it closes, since verifying the assembled contents against
+  // the server hashes is async). Ranks and summaries come from that frame,
+  // which is authoritative — the per-variant tags are only a live hint.
+  let variantChunks = new Map<string, string[]>()
+  let streamQuestions: ChatQuestion[] = []
+  let streamSuggestions: ChatSuggestion[] = []
+  let variantsAnnounced: ChatVariantSummary[] | null = null
+  let announcedRequestId: string | null = null
+  let announcedBaseVersion = 0
+  let announcedTitle = ''
+  let announcedPlatformFiles: { path: string; hash: string }[] = []
+  // Set once apply/discard succeeds, cleared when the resulting message doc
+  // lands, so the turn never blinks out of the transcript in between.
+  let awaitingResolution = false
+  let resolveTimer: ReturnType<typeof setTimeout> | null = null
   // Assistant doc id announced by the stream; the overlay clears when the
   // doc arrives via the snapshot (or the fallback timer below fires).
   let awaitingMessageId: string | null = null
@@ -145,6 +226,35 @@ export const useBuilderStore = defineStore('builder', () => {
   const headVersion = computed(() => versions.value[0]?.n ?? 0)
   const headManifest = computed<Manifest>(() => versions.value[0]?.tree ?? {})
   const treeRows = computed<TreeRow[]>(() => manifestToRows(headManifest.value))
+
+  const previewVariant = computed<PendingVariant | null>(() => {
+    const turn = pendingTurn.value
+    if (!turn || previewVariantIndex.value === null) return null
+    return turn.variants.find((v) => v.index === previewVariantIndex.value) ?? null
+  })
+
+  // What the preview renders: head, or head with a pending variant applied on
+  // top. Deleted paths are removed rather than nulled — a null key would come
+  // back as an empty folder.
+  const previewManifest = computed<Manifest>(() => {
+    const variant = previewVariant.value
+    if (!variant) return headManifest.value
+    const manifest: Manifest = { ...headManifest.value }
+    for (const path of variant.deletes) delete manifest[path]
+    for (const [path, hash] of variant.hashes) manifest[path] = hash
+    // Last, so they win: the commit forces these too, and a variant is never
+    // allowed to write one (PROTECTED_PATHS).
+    for (const file of pendingTurn.value?.platformFiles ?? []) {
+      manifest[file.path] = file.hash
+    }
+    return manifest
+  })
+
+  // Content for the previewed variant's files, which have no blob in Storage
+  // until the variant is applied.
+  const previewContents = computed<Map<string, string>>(
+    () => previewVariant.value?.contents ?? new Map(),
+  )
 
   const activeFile = computed(() => {
     const row = treeRows.value.find((r) => r.id === activeFileId.value)
@@ -168,8 +278,12 @@ export const useBuilderStore = defineStore('builder', () => {
       isStreaming.value && !streamingText.value && streamingFiles.size === 0 && !phase.value,
   )
 
+  // A pending turn blocks every other chat affordance: the turn isn't over
+  // until the user applies or discards one of its variants.
+  const isBusy = computed(() => isStreaming.value || !!pendingTurn.value || isApplying.value)
+
   const suggestions = computed(() => {
-    if (isStreaming.value || localEcho.value) return []
+    if (isBusy.value || localEcho.value) return []
     const last = lastMessage.value
     return last?.role === 'assistant' && last.status === 'complete' ? last.suggestions : []
   })
@@ -177,7 +291,7 @@ export const useBuilderStore = defineStore('builder', () => {
   // Questions are answerable only while their message is the final turn —
   // derived from the persisted doc, so they survive a reload.
   const pendingQuestions = computed<PendingQuestions | null>(() => {
-    if (isStreaming.value || localEcho.value) return null
+    if (isBusy.value || localEcho.value) return null
     const last = lastMessage.value
     if (last?.role === 'assistant' && last.status === 'complete' && last.questions.length) {
       return { messageId: last.id, questions: last.questions }
@@ -189,7 +303,7 @@ export const useBuilderStore = defineStore('builder', () => {
   const hasDanglingUserTurn = computed(
     () =>
       messagesLoaded.value &&
-      !isStreaming.value &&
+      !isBusy.value &&
       !serverBusy.value &&
       !localEcho.value &&
       lastMessage.value?.role === 'user',
@@ -197,7 +311,7 @@ export const useBuilderStore = defineStore('builder', () => {
 
   // The failed/stopped assistant turn that can be retried inline.
   const retryableMessageId = computed(() => {
-    if (isStreaming.value || localEcho.value) return null
+    if (isBusy.value || localEcho.value) return null
     const last = lastMessage.value
     if (last?.role === 'assistant' && (last.status === 'error' || last.status === 'interrupted')) {
       return last.id
@@ -222,9 +336,46 @@ export const useBuilderStore = defineStore('builder', () => {
     isStreaming.value = false
     streamingText.value = ''
     streamingFiles.clear()
+    streamingVariantRank.value = null
+    streamingVariantSummary.value = ''
     phase.value = null
     awaitingMessageId = null
     streamEnded = false
+  }
+
+  function resetVariantScratch() {
+    variantChunks = new Map()
+    streamQuestions = []
+    streamSuggestions = []
+    variantsAnnounced = null
+    announcedRequestId = null
+    announcedBaseVersion = 0
+    announcedTitle = ''
+    announcedPlatformFiles = []
+  }
+
+  function clearPendingTurn() {
+    if (resolveTimer) clearTimeout(resolveTimer)
+    resolveTimer = null
+    awaitingResolution = false
+    pendingTurn.value = null
+    previewVariantIndex.value = null
+    isApplying.value = false
+    variantConflict.value = null
+  }
+
+  // Holds the chooser on screen (disabled) between a successful apply/discard
+  // and the resulting message doc arriving, so the turn never blinks out of the
+  // transcript. Mirrors armOverlayClear's handoff for the stream overlay.
+  function armPendingClear(myRun: number) {
+    awaitingResolution = true
+    if (lastMessage.value?.role === 'assistant') {
+      clearPendingTurn()
+      return
+    }
+    resolveTimer = setTimeout(() => {
+      if (runSeq === myRun) clearPendingTurn()
+    }, 5000)
   }
 
   function clearServerBusy() {
@@ -254,6 +405,10 @@ export const useBuilderStore = defineStore('builder', () => {
     if (serverBusy.value && msgs[msgs.length - 1]?.role === 'assistant') {
       clearServerBusy()
     }
+    // The applied (or discarded) turn's message doc landed.
+    if (awaitingResolution && msgs[msgs.length - 1]?.role === 'assistant') {
+      clearPendingTurn()
+    }
     if (!isStreaming.value) return
     if (awaitingMessageId) {
       if (msgs.some((m) => m.id === awaitingMessageId)) clearOverlay()
@@ -267,16 +422,60 @@ export const useBuilderStore = defineStore('builder', () => {
       case 'reply-delta':
         streamingText.value += event.text
         break
+      case 'variant-start':
+        // Show only the option being written; the earlier one's chips have
+        // served their purpose and repeating every file per variant is noise.
+        streamingFiles.clear()
+        streamingVariantRank.value = event.rank
+        streamingVariantSummary.value = ''
+        break
+      case 'variant-summary':
+        streamingVariantSummary.value = event.text
+        break
       case 'file-start':
-        streamingFiles.set(event.path, 'writing')
+        variantChunks.set(`${event.variant}:${event.path}`, [])
+        streamingFiles.set(`${event.variant}:${event.path}`, {
+          variant: event.variant,
+          path: event.path,
+          state: 'writing',
+        })
+        break
+      case 'file-delta':
+        // Kept, unlike before: these deltas ARE the variant file contents, and
+        // nothing else has them until one variant is applied.
+        variantChunks.get(`${event.variant}:${event.path}`)?.push(event.text)
         break
       case 'file-end':
+        streamingFiles.set(`${event.variant}:${event.path}`, {
+          variant: event.variant,
+          path: event.path,
+          state: 'done',
+        })
+        break
       case 'file-delete':
-        streamingFiles.set(event.path, 'done')
+        streamingFiles.set(`${event.variant}:${event.path}`, {
+          variant: event.variant,
+          path: event.path,
+          state: 'done',
+        })
+        break
+      case 'question':
+        streamQuestions.push({ text: event.text, choices: event.choices })
+        break
+      case 'suggestion':
+        streamSuggestions.push({ label: event.label, prompt: event.prompt })
+        break
+      case 'variants':
+        // Resolved once the stream closes: verifying the assembled contents
+        // against these hashes is async.
+        variantsAnnounced = event.variants
+        announcedRequestId = event.requestId
+        announcedBaseVersion = event.baseVersion
+        announcedTitle = event.title
+        announcedPlatformFiles = event.platformFiles ?? []
         break
       case 'status':
-        phase.value =
-          event.phase === 'compacting' || event.phase === 'committing' ? event.phase : null
+        phase.value = event.phase === 'compacting' ? 'compacting' : null
         break
       case 'message':
         awaitingMessageId = event.id
@@ -285,21 +484,169 @@ export const useBuilderStore = defineStore('builder', () => {
         chatError.value = event.message
         break
       default:
-        // user-message / file-delta / question / suggestion / version / done:
-        // the Firestore snapshot (or versions listener) carries these.
+        // user-message / variant-end / done: the Firestore snapshot (or the
+        // `variants` frame) carries what matters.
         break
     }
   }
 
+  /**
+   * Turns the announced variants into a pending turn, verifying that what the
+   * stream delivered hashes to what the server produced. The SSE reader skips
+   * malformed frames silently, so an unverified variant would mean committing
+   * truncated code.
+   */
+  async function buildPendingTurn(): Promise<PendingTurn | null> {
+    const pid = projectId.value
+    if (!variantsAnnounced || !announcedRequestId || !pid) return null
+    const variants: PendingVariant[] = []
+    for (const announced of variantsAnnounced) {
+      const contents = new Map<string, string>()
+      const hashes = new Map<string, string>()
+      let intact = true
+      for (const { path, hash } of announced.writes) {
+        const text = (variantChunks.get(`${announced.index}:${path}`) ?? []).join('')
+        if ((await sha256(text)) !== hash) {
+          intact = false
+          break
+        }
+        contents.set(path, text)
+        hashes.set(path, hash)
+      }
+      if (!intact) continue
+      variants.push({
+        index: announced.index,
+        rank: announced.rank,
+        summary: announced.summary,
+        contents,
+        hashes,
+        deletes: announced.deletes,
+      })
+    }
+    if (!variants.length) return null
+    return {
+      projectId: pid,
+      requestId: announcedRequestId,
+      reply: streamingText.value,
+      title: announcedTitle,
+      baseVersion: announcedBaseVersion,
+      platformFiles: announcedPlatformFiles,
+      questions: streamQuestions,
+      suggestions: streamSuggestions,
+      // Re-ranked from 1: dropping a variant that failed verification would
+      // otherwise leave a gap, and the option letters come off the rank.
+      variants: variants
+        .sort((a, b) => a.rank - b.rank)
+        .map((v, i) => ({ ...v, rank: i + 1 })),
+    }
+  }
+
+  async function finalizePendingTurn(myRun: number) {
+    const turn = await buildPendingTurn()
+    if (runSeq !== myRun) return
+    if (!turn) {
+      chatError.value = 'The generated files arrived incomplete. Try again.'
+      clearOverlay()
+      return
+    }
+    pendingTurn.value = turn
+    previewVariantIndex.value = turn.variants[0]?.index ?? null
+    // The reply now lives on the pending turn, so the overlay can go.
+    clearOverlay()
+  }
+
+  /** The conversational half of the turn, echoed back on apply/discard. */
+  function turnPayload(turn: PendingTurn) {
+    return {
+      projectId: turn.projectId,
+      requestId: turn.requestId,
+      reply: turn.reply,
+      summary: '',
+      title: turn.title,
+      baseVersion: turn.baseVersion,
+      questions: turn.questions,
+      suggestions: turn.suggestions,
+    }
+  }
+
+  /**
+   * Commits one variant: uploads only that variant's blobs, then hands the
+   * hash delta to the server, which rebases it onto the current head and
+   * writes the version + assistant message in one transaction.
+   */
+  async function applyVariant(index: number) {
+    const turn = pendingTurn.value
+    const u = uid()
+    if (!turn || !u || isApplying.value) return
+    if (turn.projectId !== projectId.value) return
+    const variant = turn.variants.find((v) => v.index === index)
+    if (!variant || variantConflict.value) return
+    const myRun = runSeq
+    isApplying.value = true
+    chatError.value = null
+    try {
+      await Promise.all(
+        [...variant.contents].map(([path, content]) =>
+          uploadBlobIfAbsent(u, turn.projectId, variant.hashes.get(path)!, content),
+        ),
+      )
+      await applyVariantCall({
+        ...turnPayload(turn),
+        summary: variant.summary,
+        writes: [...variant.hashes].map(([path, hash]) => ({ path, hash })),
+        deletes: variant.deletes,
+      })
+      if (runSeq === myRun) armPendingClear(myRun)
+    } catch (err) {
+      if (runSeq === myRun) {
+        const message = err instanceof Error ? err.message : 'Could not apply the changes.'
+        if ((err as { code?: string }).code === 'functions/aborted') {
+          variantConflict.value = message
+        } else {
+          chatError.value = message
+        }
+        isApplying.value = false
+      }
+    } finally {
+      if (runSeq === myRun) void useWalletStore().fetchBalance()
+    }
+  }
+
+  /**
+   * Drops both variants. The turn is still recorded server-side as stopped so
+   * it stays reconciled with the wallet debit the generation already took, and
+   * so the message can be retried from the existing affordance.
+   */
+  async function discardTurn() {
+    const turn = pendingTurn.value
+    if (!turn || isApplying.value) return
+    if (turn.projectId !== projectId.value) return
+    const myRun = runSeq
+    isApplying.value = true
+    chatError.value = null
+    try {
+      await discardVariants(turnPayload(turn))
+      if (runSeq === myRun) armPendingClear(myRun)
+    } catch (err) {
+      if (runSeq === myRun) {
+        chatError.value = err instanceof Error ? err.message : 'Could not discard the changes.'
+        isApplying.value = false
+      }
+    }
+  }
+
   async function runStream(body: ChatRequestBody) {
-    if (isStreaming.value || !uid()) return
+    if (isBusy.value || !uid()) return
     const myRun = ++runSeq
     chatError.value = null
     insufficientBalance.value = false
     clearServerBusy()
+    clearPendingTurn()
+    resetVariantScratch()
     isStreaming.value = true
     streamingText.value = ''
     streamingFiles.clear()
+    streamingVariantRank.value = null
     phase.value = null
     awaitingMessageId = null
     streamEnded = false
@@ -310,7 +657,11 @@ export const useBuilderStore = defineStore('builder', () => {
       await streamChat(body, (e) => {
         if (runSeq === myRun) onStreamEvent(e)
       }, streamAbort.signal)
-      if (runSeq === myRun) armOverlayClear(myRun)
+      if (runSeq !== myRun) return
+      // A turn that produced variants ends in the chooser, not in Firestore;
+      // anything else (questions, refusal, error) already has its message doc.
+      if (variantsAnnounced) await finalizePendingTurn(myRun)
+      else armOverlayClear(myRun)
     } catch (err) {
       if (runSeq !== myRun) return
       if ((err as DOMException)?.name === 'AbortError') {
@@ -347,14 +698,14 @@ export const useBuilderStore = defineStore('builder', () => {
   function sendMessage(text: string) {
     const trimmed = text.trim()
     const pid = projectId.value
-    if (!trimmed || !pid || isStreaming.value) return
+    if (!trimmed || !pid || isBusy.value) return
     localEcho.value = trimmed
     void runStream({ projectId: pid, message: trimmed })
   }
 
   function answerQuestions(answers: ChatAnswer[]) {
     const pid = projectId.value
-    if (!pid || isStreaming.value || !answers.length) return
+    if (!pid || isBusy.value || !answers.length) return
     localEcho.value = renderAnswers(answers)
     void runStream({ projectId: pid, answers })
   }
@@ -370,7 +721,7 @@ export const useBuilderStore = defineStore('builder', () => {
    */
   function retryLast() {
     const pid = projectId.value
-    if (!pid || isStreaming.value) return
+    if (!pid || isBusy.value) return
     chatError.value = null
     if (insufficientBalance.value && lastRequest) {
       insufficientBalance.value = false
@@ -385,7 +736,7 @@ export const useBuilderStore = defineStore('builder', () => {
   // First run only: a brand-new project (no versions, no messages) auto-sends
   // its creation prompt through the exact same path as any other message.
   function maybeAutoRun() {
-    if (autoRunAttempted || isStreaming.value) return
+    if (autoRunAttempted || isBusy.value) return
     if (!versionsLoaded.value || !messagesLoaded.value) return
     if (headVersion.value !== 0 || messages.value.length > 0) return
     const pid = projectId.value
@@ -447,6 +798,8 @@ export const useBuilderStore = defineStore('builder', () => {
     savedContents.clear()
     clearOverlay()
     clearServerBusy()
+    clearPendingTurn()
+    resetVariantScratch()
     chatError.value = null
     insufficientBalance.value = false
     localEcho.value = null
@@ -494,10 +847,15 @@ export const useBuilderStore = defineStore('builder', () => {
     if (activeFileId.value) openContents.set(activeFileId.value, content)
   }
 
+  // Every commit path below is blocked while a turn is pending: advancing head
+  // would leave the previewed variant showing stale code, and the applied
+  // variant is rebased onto whatever head is at that moment.
+  const filesLocked = computed(() => !!pendingTurn.value || isApplying.value)
+
   async function saveActiveFile() {
     const p = activeFileId.value
     const u = uid()
-    if (!p || !u || !projectId.value) return
+    if (!p || !u || !projectId.value || filesLocked.value) return
     const buffer = openContents.get(p) ?? ''
     if (buffer === savedContents.get(p)) return
     const hash = await sha256(buffer)
@@ -516,7 +874,7 @@ export const useBuilderStore = defineStore('builder', () => {
   async function createFile(parentPath: string | null, name: string) {
     const u = uid()
     const clean = name.trim()
-    if (!u || !projectId.value || !clean) return
+    if (!u || !projectId.value || !clean || filesLocked.value) return
     const path = parentPath ? `${parentPath}/${clean}` : clean
     if (path in headManifest.value) throw new Error('A file with that name already exists.')
     const hash = await sha256('')
@@ -537,7 +895,7 @@ export const useBuilderStore = defineStore('builder', () => {
   async function renameFile(path: string, newName: string) {
     const u = uid()
     const clean = newName.trim()
-    if (!u || !projectId.value || !clean) return
+    if (!u || !projectId.value || !clean || filesLocked.value) return
     const parent = path.split('/').slice(0, -1).join('/')
     const newPath = parent ? `${parent}/${clean}` : clean
     if (newPath === path) return
@@ -570,7 +928,7 @@ export const useBuilderStore = defineStore('builder', () => {
 
   async function deleteFile(path: string) {
     const u = uid()
-    if (!u || !projectId.value) return
+    if (!u || !projectId.value || filesLocked.value) return
     const manifest = headManifest.value
     const tree: Manifest = {}
     for (const [k, v] of Object.entries(manifest)) {
@@ -596,7 +954,7 @@ export const useBuilderStore = defineStore('builder', () => {
 
   async function restoreVersion(n: number) {
     const u = uid()
-    if (!u || !projectId.value || n === headVersion.value) return
+    if (!u || !projectId.value || n === headVersion.value || filesLocked.value) return
     const target = versions.value.find((v) => v.n === n)
     if (!target) return
     await commitVersion(
@@ -624,6 +982,8 @@ export const useBuilderStore = defineStore('builder', () => {
     savedContents.clear()
     clearOverlay()
     clearServerBusy()
+    clearPendingTurn()
+    resetVariantScratch()
     chatError.value = null
     insufficientBalance.value = false
     localEcho.value = null
@@ -640,12 +1000,23 @@ export const useBuilderStore = defineStore('builder', () => {
     isStreaming,
     streamingText,
     streamingFiles,
+    streamingVariantRank,
+    streamingVariantSummary,
     phase,
     chatError,
     insufficientBalance,
     serverBusy,
     localEcho,
     isTyping,
+    isBusy,
+    pendingTurn,
+    previewVariantIndex,
+    previewVariant,
+    previewManifest,
+    previewContents,
+    isApplying,
+    variantConflict,
+    filesLocked,
     suggestions,
     pendingQuestions,
     hasDanglingUserTurn,
@@ -671,6 +1042,8 @@ export const useBuilderStore = defineStore('builder', () => {
     answerQuestions,
     cancelGeneration,
     retryLast,
+    applyVariant,
+    discardTurn,
     reset,
   }
 })

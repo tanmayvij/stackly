@@ -298,6 +298,7 @@ This is the important part. The repository has a GitHub Action ([`.github/workfl
 - **A server-side GHL proxy with a scoped, expiring capability.** Generated apps get a 30-minute HMAC preview token, not a CRM token; the proxy enforces a path allowlist (contacts/conversations/calendars), pins the location id, and transparently refreshes tokens.
 - **Context stays affordable via automatic compaction.** When a run approaches the model's context window, older turns are summarized by the cheap flash model so long conversations keep working without unbounded prompt growth.
 - **Chat lock** When a generation starts, a state lock is applied on the project, which means a user cannot exploit the API by spinning up multiple parallel generations for a single project. This also prevents race conditions and double-billing for the same request. 
+- **Every generation offers two ranked variants, and nothing is committed until the user picks one.** The model returns two genuinely different implementations per turn; the user previews each in the live iframe, diffs it against the current code, and keeps one. The uncommitted variants live only in the browser for the session, and the chosen one is committed server-side with an optimistic concurrency check so a second tab can't silently overwrite it. See **[docs/VARIANTS.md](docs/VARIANTS.md)** for the architecture, the trade-offs behind each decision, and the concurrency edge case.
 
 ---
 

@@ -58,8 +58,27 @@ outside the tags below.
 <reply>
 One to three sentences: what you built or changed, or why you refuse.
 </reply>
-2. Every created or changed file IN FULL (complete content, never a diff,
-   never "... unchanged ..."):
+2. Then EXACTLY 2 alternative implementations of that same request, best
+   first. rank="1" is the one you recommend; use each rank exactly once:
+<variant rank="1">
+<summary>One line, under 80 chars, no angle brackets.</summary>
+...the <file> and <delete> blocks for this alternative...
+</variant>
+<variant rank="2">
+<summary>How this one differs.</summary>
+...its own <file> and <delete> blocks...
+</variant>
+   The two alternatives must be GENUINELY DIFFERENT approaches (different
+   layout, interaction, or data shaping) - not the same code reformatted.
+   Put the simpler, smaller one first.
+   Each variant is INDEPENDENT and self-contained: its <file> blocks are
+   measured against the CURRENT project files above, never against the other
+   variant. NEVER write "same as variant 1 but ...", never omit a file
+   because the other variant already showed it. Only the variant the user
+   picks is applied, so a variant missing a file is broken.
+   Both closing tags </summary> and </variant> must be alone on their line.
+3. Inside a variant, every created or changed file IN FULL (complete
+   content, never a diff, never "... unchanged ..."):
 <file path="src/App.jsx">
 ...entire file content...
 </file>
@@ -67,18 +86,20 @@ One to three sentences: what you built or changed, or why you refuse.
    Saying you changed a file does NOT change it: a file only changes when
    its <file> block is in THIS response. If you intend to make file changes,
    ENSURE to include the <file> block.
-3. Delete a file:
+4. Delete a file (also inside a variant):
 <delete path="src/Old.jsx"/>
-4. Only if you are genuinely blocked on a decision the user must make: ask
-   at most 2 questions, each with exactly 3 choices, no other choice counts:
+5. Only if you are genuinely blocked on a decision the user must make: ask
+   at most 2 questions, each with exactly 3 choices, no other choice counts.
+   A response that asks a question must contain NO variants and NO files:
 <question>
 Which period should the dashboard show by default?
 - Today
 - This week
 - This month
 </question>
-5. Finish with 1 or 2 next-step suggestions. label = 2-4 words shown on a
-   button; the body is the full request that runs when clicked:
+6. Finish with 1 or 2 next-step suggestions, after the variants. label = 2-4
+   words shown on a button; the body is the full request that runs when
+   clicked:
 <suggest label="Add search">Add a search box to filter contacts by name</suggest>`;
 
 // The complete system message: frozen prompt + frozen API docs.

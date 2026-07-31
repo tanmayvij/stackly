@@ -1,13 +1,40 @@
-// Self-running unit tests for the pure content-addressing hash in
-// versions.service.ts. `sha256Hex` MUST match the frontend `sha256`
-// (stackly-frontend/src/lib/builder-repo.ts) or blobs written by the server
-// and the client would land at different paths. Run with plain Node:
+// Self-running unit tests for the pure helpers in versions.service.ts: the
+// content-addressing hash and the version-title derivation. `sha256Hex` MUST
+// match the frontend `sha256` (stackly-frontend/src/lib/builder-repo.ts) or
+// blobs written by the server and the client would land at different paths.
+// Run with plain Node:
 // `node lib/modules/builder/versions/versions.service.test.js`. The Storage
-// and Firestore paths (upload/commit) live in the emulator test.
+// and Firestore paths (upload/commit/rebase) live in the emulator test.
 
 import assert from "node:assert";
 import {Test, main} from "../../../test/harness";
-import {sha256Hex} from "./versions.service";
+import {HistoryMessage} from "../messages/messages.service";
+import {sha256Hex, versionTitle} from "./versions.service";
+
+/**
+ * Minimal HistoryMessage builder for versionTitle (which only reads role and
+ * content).
+ * @param {"user" | "assistant" | "system"} role The turn role.
+ * @param {string} content The turn text.
+ * @return {HistoryMessage} A message with defaults for the unused fields.
+ */
+function turn(
+  role: "user" | "assistant" | "system",
+  content: string,
+): HistoryMessage {
+  return {
+    id: "id",
+    kind: "chat",
+    role,
+    seq: 0,
+    content,
+    files: [],
+    questions: [],
+    status: null,
+    contextTokens: 0,
+    compactedThroughSeq: 0,
+  };
+}
 
 const TESTS: Test[] = [
   [
@@ -55,6 +82,35 @@ const TESTS: Test[] = [
       assert.match(a, /^[0-9a-f]{64}$/);
     },
   ],
+  [
+    "versionTitle uses the last user turn, collapsing whitespace",
+    () => {
+      const title = versionTitle([
+        turn("user", "first request"),
+        turn("assistant", "did it"),
+        turn("user", "add   a\nsearch\tbox"),
+      ]);
+      assert.equal(title, "add a search box");
+    },
+  ],
+  [
+    "versionTitle truncates a long title to 57 chars + ellipsis",
+    () => {
+      const long = "a".repeat(80);
+      const title = versionTitle([turn("user", long)]);
+      assert.equal(title.length, 60);
+      assert.equal(title, "a".repeat(57) + "...");
+    },
+  ],
+  [
+    "versionTitle skips blank user turns and falls back to \"AI update\"",
+    () => {
+      assert.equal(
+        versionTitle([turn("assistant", "no user here")]), "AI update");
+      assert.equal(versionTitle([turn("user", "   ")]), "AI update");
+      assert.equal(versionTitle([]), "AI update");
+    },
+  ],
 ];
 
-void main("versions.service sha256Hex (pure)", TESTS);
+void main("versions.service pure helpers", TESTS);

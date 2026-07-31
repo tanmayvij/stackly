@@ -3,7 +3,7 @@
   "scripts": {
     "lint": "eslint --ext .js,.ts .",
     "build": "tsc",
-    "test": "npm run build && node lib/modules/builder/parser/parser.test.js && node lib/modules/wallet/wallet.test.js && node lib/modules/builder/messages/messages.test.js && node lib/modules/preview/preview.service.test.js && node lib/modules/ghl/ghl.service.test.js && node lib/modules/ghl/proxy.controller.test.js && node lib/modules/builder/versions/versions.service.test.js && node lib/modules/builder/chat/chat.controller.test.js",
+    "test": "npm run build && node lib/modules/builder/parser/parser.test.js && node lib/modules/wallet/wallet.test.js && node lib/modules/builder/messages/messages.test.js && node lib/modules/preview/preview.service.test.js && node lib/modules/ghl/ghl.service.test.js && node lib/modules/ghl/proxy.controller.test.js && node lib/modules/builder/versions/versions.service.test.js && node lib/modules/builder/variants/variants.service.test.js && node lib/modules/builder/chat/chat.controller.test.js",
     "test:emulator": "npm run build && firebase emulators:exec --only firestore,storage,auth \"node lib/test/run-emulator.js && node lib/test/firestore.rules.test.js\"",
     "test:all": "npm test && npm run test:emulator",
     "build:watch": "tsc --watch",

@@ -13,8 +13,14 @@ import {initTestApp, clearFirestore, clearStorage} from "./emulator";
 import {suite as walletSuite} from "../modules/wallet/wallet.service.emulator.test";
 import {suite as messagesSuite} from "../modules/builder/messages/messages.service.emulator.test";
 import {suite as versionsSuite} from "../modules/builder/versions/versions.service.emulator.test";
+import {suite as variantsSuite} from "../modules/builder/variants/variants.service.emulator.test";
 
-const SUITES: Suite[] = [walletSuite, messagesSuite, versionsSuite];
+const SUITES: Suite[] = [
+  walletSuite,
+  messagesSuite,
+  versionsSuite,
+  variantsSuite,
+];
 
 /**
  * Runs every emulator suite, resetting emulator state before each test.

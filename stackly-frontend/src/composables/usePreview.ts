@@ -67,19 +67,30 @@ export function usePreview(): UsePreview {
     const mySeq = ++seq
     const uid = auth.user?.uid
     const pid = builder.projectId
-    const manifest = builder.headManifest
+    // Head, or head with the variant being previewed applied on top. A pending
+    // variant's files have no blob in Storage yet, so their content is read out
+    // of memory instead.
+    const manifest = builder.previewManifest
+    const drafts = builder.previewContents
     if (!uid || !pid) return
 
-    if (builder.headVersion === 0 || !Object.values(manifest).some((h) => h !== null)) {
+    // Emptiness comes from the manifest alone, never from headVersion: a
+    // brand-new project's first turn is previewed at head 0.
+    if (!Object.values(manifest).some((h) => h !== null)) {
       status.value = 'empty'
       srcdoc.value = ''
       return
     }
 
+    const readFile = (path: string) =>
+      drafts.has(path)
+        ? Promise.resolve(drafts.get(path)!)
+        : fetchBlob(uid, pid, manifest[path]!)
+
     status.value = 'building'
     runtimeError.value = null
 
-    const outcome = await bundlePreview(manifest, (path) => fetchBlob(uid, pid, manifest[path]!))
+    const outcome = await bundlePreview(manifest, readFile)
     if (mySeq !== seq) return
 
     if (!outcome.ok) {
@@ -88,8 +99,7 @@ export function usePreview(): UsePreview {
       return
     }
 
-    const pkgHash = manifest['package.json']
-    const packageJson = pkgHash ? await fetchBlob(uid, pid, pkgHash) : null
+    const packageJson = manifest['package.json'] ? await readFile('package.json') : null
     if (mySeq !== seq) return
 
     const ghl = await ensureGhlConfig(uid)
@@ -109,8 +119,17 @@ export function usePreview(): UsePreview {
 
   const debouncedBuild = useDebounceFn(() => void build(), 300)
 
+  // requestId is part of the key: discarding one turn and generating another
+  // can land on the same variant index with head unmoved, which would
+  // otherwise look like no change at all and leave stale code on screen.
   watch(
-    () => [builder.projectId, builder.headVersion] as const,
+    () =>
+      [
+        builder.projectId,
+        builder.headVersion,
+        builder.pendingTurn?.requestId ?? null,
+        builder.previewVariantIndex,
+      ] as const,
     () => void debouncedBuild(),
     { immediate: true },
   )

@@ -100,7 +100,9 @@ function formatAgo(date: Date | null): string {
         <button
           v-else
           type="button"
-          class="text-muted-foreground hover:border-border-strong hover:text-foreground shrink-0 cursor-pointer rounded-md border px-2 py-0.5 text-[10px] transition-colors"
+          :disabled="builder.filesLocked"
+          :title="builder.filesLocked ? 'Choose an option first' : undefined"
+          class="text-muted-foreground hover:border-border-strong hover:text-foreground shrink-0 cursor-pointer rounded-md border px-2 py-0.5 text-[10px] transition-colors disabled:cursor-default disabled:opacity-40"
           @click="askRestore(version.n)"
         >
           Restore

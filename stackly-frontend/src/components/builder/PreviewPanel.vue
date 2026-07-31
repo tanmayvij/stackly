@@ -23,6 +23,15 @@ const DEVICE_META: Record<DeviceKind, { label: string; maxWidth: string }> = {
 
 const meta = computed(() => DEVICE_META[builder.device])
 
+const OPTION_LETTERS = 'ABCDEFGH'
+// Named when the preview is showing an option that hasn't been committed, so
+// the iframe is never mistaken for the saved app (the Code tab still shows head).
+const previewingOption = computed(() => {
+  const rank = builder.previewVariant?.rank
+  if (!rank) return null
+  return `Option ${OPTION_LETTERS[rank - 1] ?? rank}`
+})
+
 function openPreview() {
   const id = route.params.id as string
   const href = router.resolve({ name: 'preview', params: { id } }).href
@@ -56,8 +65,15 @@ function openPreview() {
     </div>
 
     <div
-      class="flex min-h-0 flex-1 justify-center overflow-y-auto bg-[radial-gradient(60%_40%_at_50%_0%,rgba(99,102,241,0.06),transparent_70%)] p-4"
+      class="flex min-h-0 flex-1 flex-col items-center overflow-y-auto bg-[radial-gradient(60%_40%_at_50%_0%,rgba(99,102,241,0.06),transparent_70%)] p-4"
     >
+      <div
+        v-if="previewingOption"
+        class="mb-3 w-full shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400"
+        :class="meta.maxWidth"
+      >
+        Previewing <strong>{{ previewingOption }}</strong> — not applied yet.
+      </div>
       <div
         class="shadow-card w-full self-start overflow-hidden rounded-xl border bg-white transition-[max-width] duration-300 ease-in-out"
         :class="meta.maxWidth"

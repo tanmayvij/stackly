@@ -1,10 +1,16 @@
 // The builder chat endpoint: an authenticated, SSE-streaming onRequest
 // function (callables can't stream). One request = one generation turn:
 // balance gate → per-project lock → optional compaction → streamed LLM call
-// parsed incrementally → atomic version+message commit → wallet debit.
-// Nothing is committed until the stream completes cleanly; a client
-// disconnect aborts the upstream call and persists an interrupted turn
-// free of charge.
+// parsed incrementally → the ranked variants offered to the user → wallet
+// debit.
+//
+// This endpoint never commits. The model returns VARIANT_COUNT alternative
+// implementations and the user picks one; the chosen variant is committed by
+// the applyVariant callable (modules/builder/variants), which is also the only
+// place an assistant message for a file-changing turn is written. Turns that
+// change no files (questions, refusals) and failed turns still persist here,
+// exactly as before. A client disconnect aborts the upstream call and
+// persists an interrupted turn free of charge.
 
 import {randomUUID} from "node:crypto";
 import {onRequest} from "firebase-functions/https";
@@ -30,7 +36,9 @@ import {
   LlmStreamParser,
   PROTECTED_PATHS,
   ResponseAccumulator,
+  VariantResult,
   normalizePath,
+  selectUsableVariants,
 } from "../parser/parser";
 import {
   Answer,
@@ -54,10 +62,11 @@ import {
 } from "./prompt";
 import {
   GHL_CLIENT_PATH,
-  applyResponseToTree,
-  commitAiVersionAndMessage,
+  ensurePlatformFiles,
   fetchBlob,
   readTree,
+  sha256Hex,
+  versionTitle,
 } from "../versions/versions.service";
 import {
   addTransaction,
@@ -106,19 +115,19 @@ export function renderAnswers(answers: Answer[]): string {
 }
 
 /**
- * Derives the committed version's title from the triggering user turn.
- * @param {HistoryMessage[]} turns The effective conversation turns.
- * @return {string} A short single-line title.
+ * Flattens one variant's changes into the message's file list.
+ * @param {VariantResult} v The variant.
+ * @return {FileChange[]} Writes first, then deletes.
  */
-export function versionTitle(turns: HistoryMessage[]): string {
-  for (let i = turns.length - 1; i >= 0; i--) {
-    const turn = turns[i];
-    if (turn?.role === "user") {
-      const line = turn.content.replace(/\s+/g, " ").trim();
-      if (line) return line.length > 60 ? `${line.slice(0, 57)}...` : line;
-    }
-  }
-  return "AI update";
+function variantFileChanges(v: VariantResult): FileChange[] {
+  return [
+    ...[...v.writes.keys()].map(
+      (path): FileChange => ({path, action: "write"}),
+    ),
+    ...[...v.deletes].map(
+      (path): FileChange => ({path, action: "delete"}),
+    ),
+  ];
 }
 
 interface GenerationContext {
@@ -440,6 +449,10 @@ async function runGeneration(ctx: GenerationContext): Promise<void> {
   let completionChars = 0;
   let finished = false;
 
+  // Mirrors parse events onto the wire. File paths go out NORMALIZED: the
+  // client assembles each variant's file contents from these frames and keys
+  // them by path, so the keys have to match the normalized paths the
+  // `variants` frame later announces.
   const forward = (events: ParseEvent[]): void => {
     for (const e of events) {
       acc.add(e);
@@ -447,16 +460,29 @@ async function runGeneration(ctx: GenerationContext): Promise<void> {
       case "reply-delta":
         sse.send("reply-delta", {text: e.text});
         break;
+      case "variant-start":
+        sse.send("variant-start", {variant: e.variant, rank: e.rank});
+        break;
+      case "variant-summary":
+        sse.send("variant-summary", {variant: e.variant, text: e.text});
+        break;
+      case "variant-end":
+        sse.send("variant-end", {variant: e.variant});
+        break;
       case "file-start":
       case "file-delta":
       case "file-end":
       case "file-delete": {
         const norm = normalizePath(e.path);
-        if (norm && PROTECTED_PATHS.has(norm)) break;
+        if (!norm || PROTECTED_PATHS.has(norm)) break;
         if (e.type === "file-delta") {
-          sse.send("file-delta", {path: e.path, text: e.text});
+          sse.send("file-delta", {
+            variant: e.variant,
+            path: norm,
+            text: e.text,
+          });
         } else {
-          sse.send(e.type, {path: e.path});
+          sse.send(e.type, {variant: e.variant, path: norm});
         }
         break;
       }
@@ -509,18 +535,22 @@ async function runGeneration(ctx: GenerationContext): Promise<void> {
   const estimatedTokens = Math.ceil((promptChars + completionChars) / 4);
   const tokensUsed = usageTotal ?? estimatedTokens;
   const costCents = costForTokens(model.model, tokensUsed);
-  const filesChanged: FileChange[] = [
-    ...[...result.writes.keys()].map(
-      (path): FileChange => ({path, action: "write"}),
-    ),
-    ...[...result.deletes].map(
-      (path): FileChange => ({path, action: "delete"}),
-    ),
-  ];
+
+  // Drops malformed, empty and duplicate variants and re-ranks the rest from
+  // 1, so a truncated second variant no longer costs the user a perfectly
+  // good first one.
+  const usable = selectUsableVariants(
+    result.variants,
+    fin.defects,
+    result.warnings,
+  );
+  // Failed turns still report what the model was working on, taken from its
+  // own recommended attempt.
+  const attempted = result.variants.find((v) => v.rank === 1);
   const base: AssistantMessageInput = {
     content: result.reply,
     status: "complete",
-    files: filesChanged,
+    files: attempted ? variantFileChanges(attempted) : [],
     questions: result.questions,
     suggestions: result.suggestions,
     versionN: null,
@@ -594,57 +624,57 @@ async function runGeneration(ctx: GenerationContext): Promise<void> {
     return;
   }
 
-  const malformed = fin.incompleteFile !== null || fin.invalidFileBlocks > 0;
-  if (malformed) {
+  if (usable.length === 0) {
     await debit();
-    const written = await persistFailure("error", "malformed_output", true);
-    sse.send("message", {id: written.id, status: "error"});
-    sse.send("error", {
-      code: "malformed_output",
-      message:
-        "The model returned malformed output. No changes were applied.",
-    });
-    return;
-  }
-
-  if (filesChanged.length === 0) {
-    // Pure Q&A / refusal turn: no version.
-    await debit();
+    if (fin.defects.size > 0) {
+      // Every variant the model offered was malformed.
+      const written = await persistFailure("error", "malformed_output", true);
+      sse.send("message", {id: written.id, status: "error"});
+      sse.send("error", {
+        code: "malformed_output",
+        message:
+          "The model returned malformed output. No changes were applied.",
+      });
+      return;
+    }
+    // Pure Q&A / refusal turn: no files, so nothing to choose between.
     const written = await writeAssistantMessage(uid, projectId, base);
     sse.send("message", {id: written.id, status: "complete"});
     sse.send("done", {ok: true});
     return;
   }
 
-  sse.send("status", {phase: "committing"});
-  try {
-    const newTree = await applyResponseToTree(
-      uid,
-      projectId,
-      tree,
-      result.writes,
-      result.deletes,
-    );
-    const title = versionTitle(turns);
-    const commit = await commitAiVersionAndMessage(
-      uid,
-      projectId,
-      newTree,
-      title,
-      base,
-    );
-    await debit();
-    sse.send("version", {n: commit.n, title, files: filesChanged});
-    sse.send("message", {id: commit.messageId, status: "complete"});
-    sse.send("done", {ok: true});
-  } catch (err) {
-    logger.error("commit failed", {requestId, err});
-    await debit();
-    const written = await persistFailure("error", "commit_failed", true);
-    sse.send("message", {id: written.id, status: "error"});
-    sse.send("error", {
-      code: "commit_failed",
-      message: "Generated changes could not be saved. Try again.",
-    });
-  }
+  // Offer the options and stop. The user picks one and the applyVariant
+  // callable commits it together with the assistant message; nothing is
+  // written here beyond the debit, because the tokens are spent either way.
+  // The hashes let the client verify the file contents it assembled from the
+  // stream (a dropped SSE frame is otherwise silent) and name the blobs it
+  // uploads for the variant it applies.
+  //
+  // baseVersion and title are pinned HERE, to this generation. Both would be
+  // wrong if derived at apply time: another tab can advance head and append a
+  // newer user turn while these options sit unresolved.
+  // Platform-owned files the head tree is missing. A commit injects these, but
+  // the preview of an uncommitted variant has to resolve `./lib/ghl` too — on a
+  // project's first generation head has no copy of it at all.
+  const platformFiles = await ensurePlatformFiles(uid, projectId, tree);
+
+  await debit();
+  sse.send("variants", {
+    requestId,
+    baseVersion: ctx.headVersion,
+    title: versionTitle(turns),
+    platformFiles,
+    variants: usable.map((v) => ({
+      index: v.index,
+      rank: v.rank,
+      summary: v.summary,
+      writes: [...v.writes].map(([path, content]) => ({
+        path,
+        hash: sha256Hex(content),
+      })),
+      deletes: [...v.deletes],
+    })),
+  });
+  sse.send("done", {ok: true});
 }
